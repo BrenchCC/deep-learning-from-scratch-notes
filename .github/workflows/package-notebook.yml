@@ -1,0 +1,118 @@
+name: Convert and Package Notebooks
+
+on:
+  schedule:
+    - cron: "0 0 1 * *"
+  push:
+    branches: [main]
+    paths:
+      - "zh/**/*.qmd"
+      - "en/**/*.qmd"
+      - ".github/workflows/package-notebook.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-notebooks
+  cancel-in-progress: true
+
+jobs:
+  package-zh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      - name: Convert zh qmd to ipynb
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT_DIR="deep-learning/zh"
+          mkdir -p "$OUT_DIR"
+
+          if [ -d "zh" ]; then
+            while IFS= read -r -d '' qmd; do
+              rel="${qmd#zh/}"
+              rel_dir="$(dirname "$rel")"
+              stem="$(basename "$qmd" .qmd)"
+
+              out_subdir="$OUT_DIR/$rel_dir"
+              mkdir -p "$out_subdir"
+
+              quarto convert "$qmd" --output "$out_subdir/$stem.ipynb"
+              if [ -d "zh/$rel_dir/figures" ]; then
+                cp -a "zh/$rel_dir/figures" "$out_subdir/"
+              fi
+            done < <(find zh -type f -name '*.qmd' -print0)
+          fi
+
+      - name: Package zh notebooks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "deep-learning/zh" ] && [ "$(find deep-learning/zh -type f | wc -l)" -gt 0 ]; then
+            tar -czf deep-learning-zh.tar.gz -C deep-learning zh
+          fi
+
+      - name: Upload zh artifact
+        if: ${{ hashFiles('deep-learning/zh/**/*.ipynb') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: deep-learning-zh
+          path: deep-learning-zh.tar.gz
+
+  package-en:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      - name: Convert en qmd to ipynb
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT_DIR="deep-learning/en"
+          mkdir -p "$OUT_DIR"
+
+          if [ -d "en" ]; then
+            while IFS= read -r -d '' qmd; do
+              rel="${qmd#en/}"
+              rel_dir="$(dirname "$rel")"
+              stem="$(basename "$qmd" .qmd)"
+
+              out_subdir="$OUT_DIR/$rel_dir"
+              mkdir -p "$out_subdir"
+
+              quarto convert "$qmd" --output "$out_subdir/$stem.ipynb"
+              if [ -d "en/$rel_dir/figures" ]; then
+                cp -a "en/$rel_dir/figures" "$out_subdir/"
+              fi
+            done < <(find en -type f -name '*.qmd' -print0)
+          fi
+
+      - name: Package en notebooks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "deep-learning/en" ] && [ "$(find deep-learning/en -type f | wc -l)" -gt 0 ]; then
+            tar -czf deep-learning-en.tar.gz -C deep-learning en
+          fi
+
+      - name: Upload en artifact
+        if: ${{ hashFiles('deep-learning/en/**/*.ipynb') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: deep-learning-en
+          path: deep-learning-en.tar.gz

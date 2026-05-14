@@ -1,0 +1,11 @@
+---
+title: Deep-Learning-From-Scratch-Notes
+author: Brench
+date: 2026-05-08
+date-modified: today
+comments: false
+
+open-graph:
+  title: Deep-Learning-From-Scratch-Notes
+  description: "Deep-Learning-From-Scratch-Notes: Table of Contents"
+---
