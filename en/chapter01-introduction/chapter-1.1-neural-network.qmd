@@ -1,0 +1,175 @@
+---
+author: Brench
+date: 2026-05-08
+date-modified: 2026-05-08
+open-graph:
+  title: chapter-1.1-neural-network
+  description: "Neural Networks: A Learnable Function"
+title: "Chapter 1.1 Neural Networks: A Learnable Function"
+---
+
+Welcome to deep learning. Before diving into model architectures, it is worth returning to a more basic question: **what exactly is a neural network?**
+
+Many beginners are quickly overwhelmed by activation functions, backpropagation, gradient descent, and other technical terms. A neural network may even look like a mysterious black box. But if we temporarily set aside these implementation details, its essence is surprisingly plain: a neural network is a mathematical function. Like classical machine learning models, this function can **adapt itself** by adjusting its mapping behavior according to data.
+
+At a high level, a neural network receives input, transforms it, and produces output. "Learning" means repeatedly modifying this function under the guidance of data until it can perform a target task. In this section, we stay away from programming frameworks and code, and build a conceptual picture of neural networks from first principles.
+
+## 1.1.1 From Input to Output: Machine Learning Builds Mappings
+
+To understand neural networks, we should first step outside the specific form of a "network" and look at the underlying problem it solves. Most machine learning applications can be summarized as one goal:
+
+> **Given an input, infer the output we want.**
+
+Some typical examples make this input-output mapping intuitive:
+
+- In image classification, the input is a photo of a Ragdoll cat, and the output is the label "Ragdoll cat".
+- In sentiment analysis, the input is the sentence "I have to work overtime again this weekend", and the output is "negative sentiment".
+- In time-series prediction, the input is the stock price over the past week, and the output is the trend for the next trading day.
+- In machine translation, the input is the French sentence "J'aime l'apprentissage profond", and the output is "I like deep learning".
+
+These applications look very different on the surface, but their underlying logic is the same: we need to discover a transformation rule that converts raw input data into the desired output. In mathematical language, this is the familiar function:
+
+$$
+y = f(x)
+$$
+
+Here, $x$ is the input variable, $y$ is the output variable, and $f$ is the mapping rule we need to construct. This mapping rule is what we usually call a model.
+
+The fundamental goal of machine learning is therefore to find an appropriate function $f$ that maps inputs to outputs accurately. A neural network is one automated way to build such a function.
+
+## 1.1.2 Why Ordinary Functions Are Not Enough
+
+At this point, you may ask: if the core problem is finding a function, why not directly use linear functions, polynomial functions, or simple piecewise functions from elementary mathematics? Why design something as complex as a neural network?
+
+The answer is direct: real-world mappings are far more complex than they first appear.
+
+For simple cases, such as computing total price from unit price and quantity, a linear function $y = kx + b$ is often enough. But tasks such as image recognition, speech processing, and natural language understanding involve highly complex relationships between input and output. An image class is not determined by a single pixel, but by spatial layouts, local textures, high-level semantic features such as a dog's tail shape or a bird's beak, and many other factors working together. The sentiment of a sentence is not determined by isolated words either; it depends on context, word order, rhetorical patterns, and implicit meaning.
+
+These tasks face several core difficulties:
+
+- The input space is extremely high-dimensional. A $224 \times 224$ RGB image already has $150,528$ input dimensions.
+- The relationship between input and output is strongly nonlinear and difficult to describe with simple linear models.
+- Useful patterns are hierarchical. In images, low-level edges combine into simple shapes, which then form complex objects.
+- Useful signals are widely distributed across data and cannot be reliably extracted by hand.
+
+In such settings, simple traditional functions can capture only rough trends. They cannot precisely describe deep patterns and associations. What we need is not just any function, but a function with **strong expressive power, flexible structure, and the ability to fit complex mappings**. Neural networks were created to fill this gap.
+
+## 1.1.3 The Essence of Neural Networks: Functions with Trainable Parameters
+
+Let us return to the original question: what is a neural network?
+
+From the core viewpoint of machine learning, the most concise answer is:
+
+> **A neural network is a special kind of parameterized function.**
+
+A parameterized function is a function whose behavior is not fixed in advance, but controlled by a set of adjustable parameters. Even if the function structure is exactly the same, different parameter values can produce completely different mappings.
+
+We can write a neural network as:
+
+$$
+y = f(x; \theta)
+$$
+
+Here, $\theta$ denotes the collection of parameters in the neural network. These parameters jointly determine how $f$ processes input $x$ and what output $y$ it produces. Training a model is essentially the process of repeatedly optimizing $\theta$ so that the output of $f$ becomes closer to the desired target.
+
+This definition contains three key ideas:
+
+1. **Function nature**: no matter how complex the internal structure is, a neural network still performs a mapping from input to output.
+2. **Parameterized behavior**: a neural network is not a rigid rule set, but a function with free parameters. Changing the parameters changes the function behavior.
+3. **Learnability**: these parameters do not need to be manually specified one by one. They can be adjusted automatically from data, which is the source of a neural network's learning ability.
+
+Beginners often think of neural networks as a simple stack of neurons. But stacked neurons are only the external organizational form. The internal essence is a parameterized and learnable function. Once this is clear, later ideas such as backpropagation and gradient descent become much more natural.
+
+## 1.1.4 What "Learnable" Means: Iterative Parameter Optimization
+
+We keep saying neural networks are learnable, but what does that actually mean? Does the model understand data like a human does, memorize abstract rules, and reason about meaning?
+
+Not really. The learning process of a neural network is essentially a sequence of mathematical operations for **iterative parameter optimization**, and it is fundamentally different from human cognitive learning. A simple analogy is a radio with many knobs. The parameters are the knob positions. At the beginning, we set the knobs randomly, so the received signal may be noisy and inaccurate. We listen to the current output, compare it with the target channel, evaluate the error, and then carefully adjust the knobs according to the size and direction of the error. Repeating this process eventually tunes the radio to the desired channel.
+
+In neural network training, this process can be broken into five stages:
+
+1. **Parameter initialization**: before training starts, assign random initial values to $\theta$. The model output is usually rough or meaningless.
+2. **Forward inference**: feed an input sample $x$ into the model and compute the prediction $y$ using the current parameters.
+3. **Error measurement**: compare the prediction with the true label and quantify model performance. This is where the loss function appears.
+4. **Parameter update**: use gradient information to adjust $\theta$ in the direction that reduces the error.
+5. **Iteration**: repeat steps 2 to 4 until the output quality is acceptable and parameter changes become stable.
+
+Thus, neural network learning is neither rule injection nor conceptual understanding. It is the repeated fine-tuning of parameters so that a function gradually approximates the mapping we want. This viewpoint is crucial. From the perspective of functions and parameter optimization, many later concepts become clear: we need a loss function to measure how good the current function is; we need backpropagation to determine how parameters should change; optimization is difficult because high-dimensional parameter spaces make global optima hard to find.
+
+## 1.1.5 Why Is It Called a "Network"? From Biological Inspiration to Artificial Structure
+
+If a neural network is essentially a function, why call it a network? The name comes from its historical inspiration: biological nervous systems.
+
+The human brain contains tens of billions of neurons. Each neuron receives electrochemical signals from other neurons, integrates them, and passes signals to downstream neurons. A single neuron has limited computational ability, but when many neurons are interconnected into a complex network, higher-level cognitive abilities such as perception, reasoning, and memory emerge.
+
+Artificial neural networks borrow this organizational idea. They arrange many simple computational units, analogous to biological neurons, so that the output of one unit becomes the input of another, forming a connected network topology.
+
+It is important to emphasize that artificial neural networks only borrow the structural idea from biological neural networks. They do not reproduce the microscopic mechanisms of the brain. Terms such as "neuron", "connection", and "activation" are mostly inherited naming conventions that help us understand the structure intuitively.
+
+For beginners, it is more useful to focus on the core meaning of "network":
+
+> **It is not a single indivisible black box, but a composite structure formed by connecting many simple transformation units.**
+
+This is why we use "layers" to describe neural networks. Connected computational units are organized into stages. Input data flows through these layers, is transformed step by step, and finally produces output. This layered architecture is also a structural foundation for handling complex tasks.
+
+## 1.1.6 The Value of Depth: Hierarchical Information Processing
+
+After discussing layers, we naturally arrive at depth.
+
+Many beginners simply understand depth as having many layers, but that is only the surface. The real meaning of depth is that a neural network can use **multiple consecutive transformations** to decompose a complex mapping into several simpler sub-mappings, enabling hierarchical information processing.
+
+In short, depth provides a **hierarchical organization mechanism**. For complex tasks, the model does not need to jump directly from raw input to final output. Instead, earlier layers extract basic local features, and later layers integrate and abstract those features into higher-level semantic representations.
+
+For image classification, this process roughly looks like:
+
+- **Shallow layers near the input**: detect basic visual elements such as edges, textures, and color distributions.
+- **Middle layers**: combine low-level features into meaningful local parts, such as "a cat's whiskers" or "a bird's wing".
+- **Deep layers near the output**: integrate part-level features into an overall understanding, such as "this is an orange cat" or "this is a woodpecker".
+
+Mathematically, a multilayer neural network can be written as a composition of functions:
+
+$$
+\hat{y} = f_L(f_{L-1}(\cdots f_2(f_1(x)) \cdots))
+$$
+
+Here, $f_1, f_2, \dots, f_L$ correspond to the transformation functions of each layer, and $L$ is the total number of layers. As the number of layers increases, the model can gradually transform raw input data into internal representations that are more useful for the target task.
+
+## 1.1.7 What Does a Neural Network Actually Learn?
+
+At this point, you may wonder: after training, what has the model actually learned? Is it a set of explicit decision rules, or some formal knowledge?
+
+A common misconception is that neural networks learn explicit rules such as "if feature A is detected, output class B." In reality, what a neural network obtains is not a clearly written rule book, but:
+
+> **A set of parameter values optimized during training, and the function behavior defined by those parameters.**
+
+In other words, the trained model does not store human-readable rules for recognizing cats and dogs. It stores a numerically optimized parameter set $\theta$. When a new sample, such as an unseen animal image, enters the model, the network uses those parameters to perform transformations, feature extraction, and other computations, finally producing a classification result. No human intervention is needed, and the model does not truly "understand" cats or dogs. It is a parameter-driven mathematical mapping.
+
+Neural networks encode statistical regularities from training data into parameter values. For example, if a training set contains the association that cats often have pointed ears and round pupils, this statistical pattern may be reflected in certain connection weights. When a new image contains similar visual features, the model may classify it as a cat rather than a dog. This also explains why neural networks sometimes make mistakes. If a rabbit image visually resembles a cat, with pointed ears and round eyes, the model may classify it as a cat because it has learned parameter-based feature associations, not the biological essence of cats and rabbits.
+
+::: {.callout-tip}
+There is a funny Bilibili video titled "How to Tell Shiba Inu from Bread", which humorously shows the strange mistakes neural networks can make in image recognition. For humans, distinguishing a Shiba Inu from fresh bread is easy, but for a neural network it can be surprisingly tricky. Interested readers can watch it through this [link](https://www.bilibili.com/video/BV1is4y1d7nA?t=2.4).
+:::
+
+Understanding this is essential for later topics such as generalization and overfitting. The ultimate goal of training is to make the model capture general patterns in data, not memorize the training samples themselves. If the model only remembers superficial features in the training set and fails to extract transferable patterns, it will struggle on new data. This phenomenon is called overfitting.
+
+## 1.1.8 Why Can Neural Networks Work Across So Many Tasks?
+
+If a neural network is just a parameterized function, why can it be used in computer vision, speech recognition, natural language processing, recommender systems, and many other fields?
+
+The core reason is simple: **these seemingly different tasks can all be abstracted as mapping problems from an input space to an output space.**
+
+Image classification maps pixel matrices to class labels. Speech recognition maps acoustic signals to text sequences. Machine translation maps a source-language sequence to a target-language sequence. Recommendation systems map user-item features to preference probabilities. The external forms differ, but the mathematical logic is shared.
+
+The strength of neural networks is that they provide a general and flexible function modeling paradigm. They do not require us to design task-specific rules from scratch. By adjusting internal parameters, they can adapt to different mapping requirements. More importantly, they are especially good at high-dimensional, nonlinear, and highly entangled mappings, which are common in real-world tasks.
+
+Different tasks still require different network structures. For images, convolutional neural networks are often used to capture local spatial correlations. For text, recurrent networks or attention-based architectures are commonly used to model sequential dependency and context. For recommendation, factorization machines or deep collaborative filtering networks are often used to model user-item interactions.
+
+These differences are differences in the concrete construction of the function. They do not change the essence of a neural network as a learnable parameterized function. As long as a task can be formulated as a data-driven mapping problem, a neural network may be a powerful tool for solving it.
+
+## 1.1.9 Summary
+
+In this section, we reduced neural networks to their simplest viewpoint: they are mathematical functions. They receive input, perform computations, and produce output. Image classification, sentiment analysis, and machine translation look very different, but all can be understood as mappings from input to output.
+
+The distinctive feature of a neural network is that it is not a fixed rigid function. It is a function with trainable parameters. The parameters determine how the function behaves, and training continuously adjusts those parameters according to data feedback. "Depth" can also be understood as using multiple layers of transformations to turn raw input into internal representations that are more useful for the target task.
+
+So far, however, we have only said qualitatively that the model should output more accurate results. We have not defined a concrete standard for measuring "accuracy". How large is the gap between the current output and the desired target? We need an objective and quantifiable metric. That metric is the **loss function**, which measures the difference between predictions and true values and guides neural network training.

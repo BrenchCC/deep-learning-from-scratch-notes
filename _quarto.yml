@@ -71,3 +71,9 @@ website:
       contents:
         - text: Home
           href: en/index.qmd
+        - section: "Part 1: Deep Learning Foundations"
+          contents:
+            - section: "Chapter 1: Introduction to Deep Learning"
+              contents: "en/chapter01-introduction/*.qmd"
+            - section: "Chapter 2: Getting Started with PyTorch"
+              contents: "en/chatper02-pytorch-introduction/*.qmd"
