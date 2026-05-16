@@ -1,18 +1,19 @@
 ---
-title: "Chapter 2.2 PyTorch Dimension Transformation Operations"
 author: Brench
 date: 2026-05-11
 date-modified: 2026-05-11
 open-graph:
   title: chapter-2.2-dim-transform-appendix
   description: "PyTorch Dimension Transformation Operations"
+title: "Chapter 2.2 PyTorch Dimension Transformation Operations"
+order: 2
 ---
 
-### 1. Reshaping
+## 2.2.1 Reshaping
 
 **Core functions:** `view`, `reshape`, `flatten`
 
-#### 1.1 `torch.view` / `torch.reshape`
+### 2.2.1.1 `torch.view` / `torch.reshape`
 
 * **Academic definition:** Change the shape of a tensor without changing the total number of elements. `view` only works on contiguous tensors, while `reshape` automatically handles memory copies when needed.
 * **Intuitive explanation:** Like reshaping clay: the amount of material stays the same, but a long strip can become a block.
@@ -37,7 +38,7 @@ x = torch.randn(32, 128, 768)
 x_heads = x.view(32, 128, 12, 64)
 ```
 
-#### 1.2 `torch.flatten`
+### 2.2.1.2 `torch.flatten`
 
 * **Academic definition:** Flatten a specified range of dimensions into one dimension.
 * **Intuitive explanation:** Press a layered pastry into one flat sheet.
@@ -63,11 +64,11 @@ flat_features = features.flatten(start_dim = 1)
 
 ---
 
-### 2. Swapping
+## 2.2.2 Swapping
 
 **Core functions:** `permute`, `transpose`
 
-#### 2.1 `torch.permute`
+### 2.2.2.1 `torch.permute`
 
 * **Academic definition:** Rearrange all dimensions according to a specified index order.
 * **Intuitive explanation:** Move any dimension to any position you want.
@@ -91,7 +92,7 @@ x_heads = torch.randn(32, 128, 12, 64)
 query = x_heads.permute(0, 2, 1, 3)
 ```
 
-#### 2.2 `torch.transpose`
+### 2.2.2.2 `torch.transpose`
 
 * **Academic definition:** Swap only **two** specified dimensions.
 * **Intuitive explanation:** Less flexible than `permute`, but more concise for pairwise dimension swaps.
@@ -108,7 +109,7 @@ K_t = K.transpose(-1, -2)
 
 ---
 
-### 3. Adding and Removing Dimensions
+## 2.2.3 Adding and Removing Dimensions
 
 **Core functions:** `unsqueeze`, `squeeze`
 
@@ -132,11 +133,11 @@ mask_expanded = mask.unsqueeze(1).unsqueeze(2)
 
 ---
 
-### 4. Combining
+## 2.2.4 Combining
 
 **Core functions:** `cat` (concatenate), `stack`
 
-#### 4.1 `torch.cat`
+### 2.2.4.1 `torch.cat`
 
 * **Academic definition:** Concatenate tensors along an existing dimension.
 * **Intuitive explanation:** Extend an existing line by connecting pieces together.
@@ -154,14 +155,14 @@ new_key = torch.randn(1, 12, 1, 64)
 current_key = torch.cat([past_key, new_key], dim = 2)
 ```
 
-#### 4.2 `torch.stack`
+### 2.2.4.2 `torch.stack`
 
 * **Academic definition:** Concatenate tensors along a new dimension.
 * **Intuitive explanation:** Stack pieces to create a new height dimension.
 * **Advanced example (RL Experience Replay):**
 **Scenario:** In reinforcement learning, sample states from multiple steps in a replay buffer and pack them into a batch.
 
-### Summary Comparison Table
+## 2.2.5 Summary Comparison Table
 
 | Function | Operation Essence | Typical Academic Scenario (LLM/RL) |
 | --- | --- | --- |

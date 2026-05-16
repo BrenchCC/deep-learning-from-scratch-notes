@@ -1,18 +1,19 @@
 ---
-title: "Chapter 2.2 PyTorch 维度变换操作函数"
 author: Brench
 date: 2026-05-11
 date-modified: 2026-05-11
 open-graph:
   title: chapter-2.2-dim-transform-appendix
   description: "PyTorch 维度变换操作函数"
+title: "Chapter 2.2 PyTorch 维度变换操作函数"
+order: 2
 ---
 
-### 1. 重塑类 (Reshaping)
+## 2.2.1 重塑类 (Reshaping)
 
 **核心函数：** `view`, `reshape`, `flatten`
 
-#### 1.1 `torch.view` / `torch.reshape`
+### 2.2.1.1 `torch.view` / `torch.reshape`
 
 * **学术定义：** 改变张量的形状（Shape），但不改变其元素总数。`view` 只能处理内存连续（Contiguous）的张量，`reshape` 则会自动处理内存复制。
 * **通俗解释：** 像玩橡皮泥，总量不变，把它从“长条”搓成“方块”。
@@ -40,7 +41,7 @@ x_heads = x.view(32, 128, 12, 64)
 
 
 
-#### 1.2 `torch.flatten`
+### 2.2.1.2 `torch.flatten`
 
 * **学术定义：** 将指定范围内的维度“压平”为一维。
 * **通俗解释：** 把千层饼拍扁成一张薄饼。
@@ -69,11 +70,11 @@ flat_features = features.flatten(start_dim = 1)
 
 ---
 
-### 2. 交换类 (Swapping)
+## 2.2.2 交换类 (Swapping)
 
 **核心函数：** `permute`, `transpose`
 
-#### 2.1 `torch.permute`
+### 2.2.2.1 `torch.permute`
 
 * **学术定义：** 按照指定索引重新排列所有维度的顺序。
 * **通俗解释：** 乾坤大挪移，想把第几维放哪就放哪。
@@ -100,7 +101,7 @@ query = x_heads.permute(0, 2, 1, 3)
 
 
 
-#### 2.2 `torch.transpose`
+### 2.2.2.2 `torch.transpose`
 
 * **学术定义：** 仅交换**两个**指定的维度。
 * **通俗解释：** 只能两两互换，不如 `permute` 灵活，但特定场景更简洁。
@@ -119,7 +120,7 @@ K_t = K.transpose(-1, -2)
 
 ---
 
-### 3. 增减类 (Adding/Removing)
+## 2.2.3 增减类 (Adding/Removing)
 
 **核心函数：** `unsqueeze`, `squeeze`
 
@@ -145,11 +146,11 @@ mask_expanded = mask.unsqueeze(1).unsqueeze(2)
 
 ---
 
-### 4. 拼接类 (Combining)
+## 2.2.4 拼接类 (Combining)
 
 **核心函数：** `cat` (concatenate), `stack`
 
-#### 4.1 `torch.cat`
+### 2.2.4.1 `torch.cat`
 
 * **学术定义：** 在现有维度上连接张量。
 * **通俗解释：** 接龙，绳子变长了。
@@ -167,7 +168,7 @@ current_key = torch.cat([past_key, new_key], dim = 2)
 
 ```
 
-#### 4.2 `torch.stack`
+### 2.2.4.2 `torch.stack`
 
 * **学术定义：** 沿着新维度连接张量。
 * **通俗解释：** 叠罗汉，高度增加了。
@@ -175,7 +176,7 @@ current_key = torch.cat([past_key, new_key], dim = 2)
 **场景：** 强化学习中，从 Replay Buffer 采样多个 Step 的状态，打包成 Batch。
 
 
-### 总结对比表
+## 2.2.5 总结对比表
 
 | 函数 | 操作本质 | 典型学术场景 (LLM/RL) |
 | --- | --- | --- |

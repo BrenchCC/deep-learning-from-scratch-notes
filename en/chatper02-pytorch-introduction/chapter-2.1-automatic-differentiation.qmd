@@ -6,6 +6,7 @@ open-graph:
   title: chapter-2.1-automatic-differentiation
   description: "Automatic Differentiation in PyTorch"
 title: "Chapter 2.1 Automatic Differentiation in PyTorch"
+order: 1
 ---
 
 In Section 1.3, we treated the computation graph as a chain of responsibility: if the loss has a certain value, we can trace backward along the chain and determine how much responsibility each parameter carries. In this section, we switch to a more engineering-oriented view: how does a framework automatically build this chain, and how does it compute gradients when needed?

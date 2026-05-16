@@ -6,6 +6,7 @@ open-graph:
   title: chapter-1.1-neural-network
   description: "Neural Networks: A Learnable Function"
 title: "Chapter 1.1 Neural Networks: A Learnable Function"
+order: 1
 ---
 
 Welcome to deep learning. Before diving into model architectures, it is worth returning to a more basic question: **what exactly is a neural network?**

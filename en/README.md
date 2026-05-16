@@ -8,3 +8,4 @@
 
 - 2.1 Automatic Differentiation in PyTorch
 - 2.2 PyTorch Dimension Transformation Operations
+- 2.3 Gradient Recording and Control in PyTorch

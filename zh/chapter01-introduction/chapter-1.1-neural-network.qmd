@@ -6,6 +6,7 @@ open-graph:
   title: chapter-1.1-neural-network
   description: "神经网络：一个可学习的函数"
 title: "Chapter 1.1 神经网络：一个可学习的函数"
+order: 1
 ---
 
 欢迎来到深度学习领域！在深入各类模型架构之前，不妨先回到原点，思考一个更为基础的问题：**神经网络究竟是什么？**
