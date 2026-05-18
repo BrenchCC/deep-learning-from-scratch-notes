@@ -15,10 +15,10 @@ order: 2
 
 ### 2.2.1.1 `torch.view` / `torch.reshape`
 
-* **Academic definition:** Change the shape of a tensor without changing the total number of elements. `view` only works on contiguous tensors, while `reshape` automatically handles memory copies when needed.
-* **Intuitive explanation:** Like reshaping clay: the amount of material stays the same, but a long strip can become a block.
+* **Academic definition:** Reassign the shape of a tensor while keeping the total number of elements unchanged. `view` requires contiguous memory, while `reshape` can create a copy when that is necessary.
+* **Intuitive explanation:** Think of the same piece of clay being molded into another form: nothing is added or removed, but the outline changes.
 * **Simple example (syntax):**
-Turn a 12-element vector into a matrix.
+Arrange a 12-element vector into a matrix.
 
 ```python
 x = torch.arange(12) # shape: (12)
@@ -26,8 +26,8 @@ y = x.view(3, 4)     # shape: (3, 4)
 ```
 
 * **Advanced example (LLM Multi-Head Attention):**
-**Scenario:** In a Transformer, split the hidden dimension into multiple heads.
-Suppose `batch_size=32`, `seq_len=128`, and `hidden_dim=768`, with 12 heads and 64 dimensions per head.
+**Scenario:** In a Transformer, the hidden dimension is commonly divided across multiple attention heads.
+Suppose `batch_size=32`, `seq_len=128`, and `hidden_dim=768`, which corresponds to 12 heads with 64 dimensions each.
 
 ```python
 # Input: [Batch, Seq_Len, Hidden_Dim]
@@ -40,8 +40,8 @@ x_heads = x.view(32, 128, 12, 64)
 
 ### 2.2.1.2 `torch.flatten`
 
-* **Academic definition:** Flatten a specified range of dimensions into one dimension.
-* **Intuitive explanation:** Press a layered pastry into one flat sheet.
+* **Academic definition:** Merge a selected range of dimensions into a single dimension.
+* **Intuitive explanation:** Compress several layers into one flat surface while keeping the underlying content.
 * **Simple example (syntax):**
 
 ```python
@@ -51,7 +51,7 @@ y = x.flatten(start_dim = 1)
 ```
 
 * **Advanced example (CNN/RL policy network):**
-**Scenario:** In reinforcement learning, process image feature maps before feeding them into a fully connected layer.
+**Scenario:** In reinforcement learning with image observations, feature maps from a CNN are usually flattened before entering a fully connected layer.
 
 ```python
 # Input: [Batch, Channels, Height, Width] -> [32, 64, 7, 7]
@@ -70,8 +70,8 @@ flat_features = features.flatten(start_dim = 1)
 
 ### 2.2.2.1 `torch.permute`
 
-* **Academic definition:** Rearrange all dimensions according to a specified index order.
-* **Intuitive explanation:** Move any dimension to any position you want.
+* **Academic definition:** Reorder every dimension according to the index sequence you provide.
+* **Intuitive explanation:** It is like assigning new seats to all dimensions: each axis moves to the position you specify.
 * **Simple example (syntax):**
 
 ```python
@@ -81,7 +81,7 @@ y = x.permute(2, 0, 1)
 ```
 
 * **Advanced example (Transformer dimension adjustment):**
-**Scenario:** In multi-head attention, `Num_Heads` is often moved before `Seq_Len` so matrix multiplication can be performed in parallel across heads.
+**Scenario:** In multi-head attention, `Num_Heads` is often placed before `Seq_Len` so matrix multiplication can run in parallel over heads.
 
 ```python
 # Continuing from the view example: [Batch, Seq_Len, Num_Heads, Head_Dim]
@@ -94,10 +94,10 @@ query = x_heads.permute(0, 2, 1, 3)
 
 ### 2.2.2.2 `torch.transpose`
 
-* **Academic definition:** Swap only **two** specified dimensions.
-* **Intuitive explanation:** Less flexible than `permute`, but more concise for pairwise dimension swaps.
+* **Academic definition:** Exchange exactly **two** selected dimensions.
+* **Intuitive explanation:** It is less general than `permute`, but cleaner when only one pair of axes needs to change places.
 * **Advanced example (preparing matrix multiplication):**
-**Scenario:** When computing attention scores, transpose the last two dimensions of the Key tensor.
+**Scenario:** When computing attention scores, the Key tensor usually needs its last two dimensions swapped to align with Query.
 
 ```python
 # Key: [Batch, Heads, Seq_Len, Head_Dim]
@@ -113,9 +113,9 @@ K_t = K.transpose(-1, -2)
 
 **Core functions:** `unsqueeze`, `squeeze`
 
-* **Simple example:** `unsqueeze` adds a singleton dimension, and `squeeze` removes singleton dimensions.
+* **Simple example:** `unsqueeze` inserts a size-1 dimension, while `squeeze` removes dimensions of size 1.
 * **Advanced example (broadcasting):**
-**Scenario:** Apply an attention mask in a large model. The mask is usually 2D, but it needs to be added to a 4D attention score tensor.
+**Scenario:** When applying an attention mask in a large model, the mask is often 2D even though it must be added to a 4D attention score tensor.
 
 ```python
 # Scores: [Batch, Heads, Seq_Len, Seq_Len]
@@ -139,10 +139,10 @@ mask_expanded = mask.unsqueeze(1).unsqueeze(2)
 
 ### 2.2.4.1 `torch.cat`
 
-* **Academic definition:** Concatenate tensors along an existing dimension.
-* **Intuitive explanation:** Extend an existing line by connecting pieces together.
+* **Academic definition:** Join tensors along a dimension that already exists.
+* **Intuitive explanation:** Like connecting several segments end to end: the line becomes longer along the same direction.
 * **Advanced example (KV Cache inference acceleration):**
-**Scenario:** During LLM generation, append newly generated Keys/Values to the cache.
+**Scenario:** During autoregressive LLM generation, newly produced Keys/Values are appended to the existing cache.
 
 ```python
 # Cache: [Batch, Heads, Past_Len, Head_Dim]
@@ -157,19 +157,19 @@ current_key = torch.cat([past_key, new_key], dim = 2)
 
 ### 2.2.4.2 `torch.stack`
 
-* **Academic definition:** Concatenate tensors along a new dimension.
-* **Intuitive explanation:** Stack pieces to create a new height dimension.
+* **Academic definition:** Create a new dimension and combine tensors along that new axis.
+* **Intuitive explanation:** Instead of extending an old direction, place several tensors into a new layer.
 * **Advanced example (RL Experience Replay):**
-**Scenario:** In reinforcement learning, sample states from multiple steps in a replay buffer and pack them into a batch.
+**Scenario:** In reinforcement learning, states sampled from several steps in a replay buffer can be organized into one batch.
 
 ## 2.2.5 Summary Comparison Table
 
 | Function | Operation Essence | Typical Academic Scenario (LLM/RL) |
 | --- | --- | --- |
-| `view` / `reshape` | **Restructure** (dimension product unchanged) | Split `Hidden_Dim` into `Num_Heads * Head_Dim` |
-| `flatten` | **Flatten** (multi-dimensional to one-dimensional) | Feed CNN features into an MLP decision layer |
-| `permute` | **Full permutation** (arbitrary dimension reorder) | Convert `(B, L, H, D)` to `(B, H, L, D)` for parallel attention |
-| `transpose` | **Pairwise swap** (swap one pair only) | Matrix transpose for attention score computation |
-| `unsqueeze` | **Add dimension** (insert a size-1 dimension) | Create masks that broadcast to multi-head attention matrices |
-| `cat` | **Concatenate** (extend existing dimension) | KV Cache update during inference; multimodal feature fusion |
-| `stack` | **Stack** (add a new dimension) | Pack multiple time-step states into a batch |
+| `view` / `reshape` | **Shape rearrangement** (element count unchanged) | Split `Hidden_Dim` into `Num_Heads * Head_Dim` |
+| `flatten` | **Dimension merging** (many dimensions to one) | Prepare CNN features before an MLP decision layer |
+| `permute` | **Global reordering** (move axes arbitrarily) | Convert `(B, L, H, D)` to `(B, H, L, D)` for parallel attention |
+| `transpose` | **Two-axis swap** (exchange one pair only) | Prepare matrix transposition for attention score computation |
+| `unsqueeze` | **Axis insertion** (add a size-1 dimension) | Build masks that can broadcast to multi-head attention matrices |
+| `cat` | **Join along an old axis** (extend an existing dimension) | KV Cache updates during inference; multimodal feature fusion |
+| `stack` | **Join along a new axis** (create an extra dimension) | Organize multiple time-step states into a batch |

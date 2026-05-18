@@ -9,15 +9,15 @@ title: "Chapter 2.3 Gradient Recording and Control in PyTorch"
 order: 3
 ---
 
-In Section 2.1, we answered one question: how are gradients computed? During the forward pass, PyTorch keeps records; during the backward pass, it checks those records. Autograd builds the computation graph and then propagates gradients backward along the graph.
+In Section 2.1, we answered the question of where gradients come from. PyTorch records the forward computation, then traces those records during the backward pass. Autograd uses the computation graph as the structure that carries gradients back through the operations.
 
-But when we write code, we quickly run into another practical question: should this record even be kept?
+When writing real code, however, another practical question appears almost immediately: does this computation need to be recorded at all?
 
-During training, we certainly need it because we need backpropagation. But during validation, inference, feature extraction, or simply running a model once to inspect its output, keeping this record becomes wasteful. It saves intermediate results, builds a computation graph, consumes memory, and may accidentally pull code that was meant to be numerical-only into backpropagation.
+During training, the answer is yes because backpropagation will follow. During validation, inference, feature extraction, or a quick run just to inspect outputs, the record is often unnecessary. Keeping it means storing intermediate results, building a graph, spending extra memory, and sometimes accidentally dragging numerical-only code into a gradient path.
 
-So in this section, we switch perspectives. Instead of discussing how differentiation is performed, we discuss which computations are recorded by Autograd and which are ignored. PyTorch gives us several direct switches: `torch.no_grad()`, `torch.enable_grad()`, and the inference-oriented `torch.inference_mode()`. They do not change the numerical results, but they do change whether a computation graph is built, whether backpropagation is possible, and how much memory and overhead the computation uses.
+This section therefore changes the angle. Instead of asking how differentiation is carried out, we ask which computations Autograd records and which ones it skips. PyTorch provides several direct controls: `torch.no_grad()`, `torch.enable_grad()`, and the inference-focused `torch.inference_mode()`. They leave the numerical forward results unchanged, but they affect whether a graph is built, whether backward propagation is possible, and how much extra memory and runtime overhead is introduced.
 
-This reflects an important PyTorch design idea: operators define how computation is performed, while Autograd controls whether that computation is recorded. We will start with the most common tool, `no_grad()`, and then examine these gradient recording modes.
+This reflects an important separation in PyTorch: operators decide how values are computed, while Autograd decides whether those computations leave differentiable records. We will begin with the most common control, `no_grad()`, and then compare the available gradient recording modes.
 
 ```{python}
 import torch
@@ -29,13 +29,13 @@ print('PyTorch version:', torch.__version__)
 
 ## 2.3.1 `torch.no_grad()`: Pause Recording
 
-By default, as long as a tensor has `requires_grad=True` and we perform operations on it, PyTorch automatically builds a computation graph. In other words, whenever you compute inside a differentiable region, Autograd silently records the computation for you. But sometimes we do not need this record.
+By default, when a tensor with `requires_grad=True` participates in an operation, PyTorch builds the corresponding computation graph. In other words, computations performed in a differentiable context are quietly recorded by Autograd. Sometimes, however, that record is not needed.
 
-For example, when validating model performance, we usually do not need gradients because we are not going to run backpropagation. During inference, we only care about the model output, not the path used to compute it. In these cases, letting Autograd continue recording wastes memory and may reduce performance.
+For instance, model validation usually does not require gradients because no backward pass will be run. During inference, we care about the output values, not about preserving the path that produced them. In such cases, allowing Autograd to keep recording only increases memory use and can slow execution.
 
-PyTorch therefore provides the `torch.no_grad()` context manager, which can also be used as a decorator. It explicitly tells Autograd: inside this block, do not record computations.
+For this reason, PyTorch provides the `torch.no_grad()` context manager, which can also be used as a decorator. It gives Autograd a clear instruction: do not record computations inside this block.
 
-Here is a direct comparison. In the default mode:
+Here is a simple comparison. In the default mode:
 
 ```{python}
 model = nn.Linear(6, 4)
@@ -46,9 +46,9 @@ y_pred = model(x)
 print('`y_pred.requires_grad` before `no_grad()`:', y_pred.requires_grad)
 ```
 
-The output is `True`, because model parameters have `requires_grad=True` by default, so the result enters the computation graph.
+The output is `True` because model parameters require gradients by default, so the forward result becomes part of the computation graph.
 
-Now place the forward pass inside `no_grad()`:
+Now put the same forward pass inside `no_grad()`:
 
 ```{python}
 with torch.no_grad():
@@ -57,9 +57,9 @@ with torch.no_grad():
 print('`y_pred.requires_grad` inside `no_grad()`:', y_pred.requires_grad)
 ```
 
-This time the output is `False`.
+This time, the output is `False`.
 
-Inside `no_grad()`, all forward computation still runs normally, but the results are no longer tracked by Autograd. Once a tensor is no longer tracked, later computations based on it are also not tracked. If we call `backward()` on such a tensor, PyTorch raises an error because the tensor is not part of any computation graph.
+Inside `no_grad()`, the forward computation still runs as usual. The difference is that newly produced results are not tracked by Autograd. Once a tensor is untracked, later values derived from it are usually untracked as well. Calling `backward()` on such a value raises an error because there is no computation graph to trace.
 
 ```{python}
 loss = F.mse_loss(y_pred, y)
@@ -69,9 +69,9 @@ except RuntimeError as err:
     print('RuntimeError:', err)
 ```
 
-Here, `loss` is computed outside `no_grad()`, but it is based on `y_pred`, which is already untracked. The other input, `y`, does not request gradients either. Therefore, `loss` is also excluded from the computation graph, and calling `backward()` on it raises an error.
+Here, `loss` is computed outside the `no_grad()` block, but it depends on `y_pred`, which was already produced without tracking. The other input, `y`, does not request gradients either. As a result, `loss` is also outside the graph, and `backward()` has nothing to follow.
 
-Some people may think that `no_grad()` changes the `requires_grad` attribute of tensors to `False`, but it does not. `no_grad()` only tells Autograd not to track computations in the current block. It does not modify tensor attributes. A tensor created outside `no_grad()` can still have `requires_grad=True`, but inside `no_grad()` it is treated like an ordinary tensor for the purpose of tracking.
+It is easy to assume that `no_grad()` changes tensor attributes such as `requires_grad` to `False`, but that is not what happens. `no_grad()` controls whether computations in the current block are tracked; it does not edit existing tensor properties. A tensor created outside the block may still have `requires_grad=True`, yet computations involving it inside `no_grad()` are treated as untracked.
 
 ```{python}
 x = torch.randn(10, 6, requires_grad=True)
@@ -82,9 +82,9 @@ with torch.no_grad():
     print('`y_pred.requires_grad` inside `no_grad()`:', y_pred.requires_grad)
 ```
 
-So `no_grad()` does not remove a tensor's differentiability in principle. It only prevents new computations inside the context from being recorded. The tensor's `requires_grad` attribute is a capability declaration, while `no_grad()` is behavior control. These two concepts are independent.
+So `no_grad()` does not remove a tensor's ability to become differentiable in principle. It only prevents new computations in that context from being recorded. The `requires_grad` attribute is a capability declaration, while `no_grad()` is a behavior switch. The two ideas are separate.
 
-Also, if a new tensor is created inside `no_grad()` and we later want it to participate in Autograd, we can call `requires_grad_()`:
+Similarly, if a new tensor is created inside `no_grad()` and later needs to participate in Autograd, we can call `requires_grad_()`:
 
 ```{python}
 with torch.no_grad():
@@ -95,19 +95,19 @@ x.requires_grad_()
 print('`x.requires_grad` after `requires_grad_()`:', x.requires_grad)
 ```
 
-In other words, `no_grad()` temporarily disables recording. It does not permanently revoke a tensor's ability to become differentiable. Internally, PyTorch still maintains state so gradient recording can be restored later. This introduces some computation and memory overhead, which becomes an important contrast with `inference_mode()`. In `inference_mode()`, PyTorch disables more Autograd-related machinery and prevents tensors created inside it from re-entering gradient tracking through `requires_grad_()`.
+In short, `no_grad()` temporarily disables recording. It does not permanently revoke the possibility of differentiability. PyTorch still keeps enough internal state to restore gradient recording later, and that state has some computational and memory cost. This will matter when we compare it with `inference_mode()`, where PyTorch turns off more Autograd-related machinery and prevents tensors created inside the context from re-entering tracking through `requires_grad_()`.
 
-From a lower-level perspective, computation in PyTorch is numerical behavior, while recording is Autograd behavior. `no_grad()` only affects the latter. This is why it is common in validation, inference deployment, and parameter updates.
+From a lower-level perspective, numerical computation and Autograd recording are separate behaviors in PyTorch. `no_grad()` affects only the recording side, which is why it appears so often in validation, inference deployment, and parameter update code.
 
-The next natural question is: if gradient recording can be disabled, can it be re-enabled locally? What if a small step during inference suddenly needs gradients? This leads to `torch.enable_grad()`.
+The next question follows naturally: if gradient recording can be disabled, can it be restored only for a small region? What if one step inside an inference flow suddenly needs gradients? That is where `torch.enable_grad()` comes in.
 
 ## 2.3.2 `torch.enable_grad()`: Resume Recording
 
-In the previous section, we saw that `no_grad()` pauses Autograd recording. A natural question follows: if we are already inside `no_grad()`, can we re-enable gradients for only a small part of the computation?
+The previous section showed that `no_grad()` pauses Autograd recording. If we are already inside such a block, can we turn gradients back on for only a small part of the computation?
 
-Yes. That is what `enable_grad()` does.
+Yes. That is exactly what `enable_grad()` is for.
 
-We can also use `enable_grad()` outside and nest `no_grad()` inside it. These contexts can be nested freely. In the default mode, however, using `enable_grad()` is equivalent to doing nothing, so we usually do not write it.
+The nesting can also go the other way: gradients can be enabled outside, with `no_grad()` used for an inner region. These contexts compose freely. In the default mode, though, writing `enable_grad()` at the outermost level is usually redundant because gradients are already enabled.
 
 Consider a simple example:
 
@@ -126,13 +126,13 @@ with torch.no_grad():
 z.backward(gradient=torch.ones_like(z))
 ```
 
-The important point is that the outer `no_grad()` disables Autograd recording, while the inner `enable_grad()` locally restores it. After leaving the inner `enable_grad()` block, the outer `no_grad()` remains active, so later computation returns to the untracked state. This shows that gradient modes are managed like a stack: entering a context pushes a mode, and exiting it restores the previous mode.
+The important point is the interaction between the two contexts. The outer `no_grad()` disables recording, and the inner `enable_grad()` temporarily restores it. After the inner block exits, the outer `no_grad()` is still in effect, so subsequent computation becomes untracked again. Gradient modes are therefore managed like a stack: entering a context pushes a mode, and leaving it restores the previous one.
 
 Why is this useful?
 
-Many code paths are shared. During inference, most forward computation does not need gradients, but a certain intermediate step may need sensitivity analysis. Or a debugging path may temporarily need to compute a gradient. Without `enable_grad()`, we would have to split the code or repeatedly switch state outside. With `enable_grad()`, we can locally turn recording back on where needed without affecting the overall inference flow.
+This is useful because many engineering paths are shared. Most inference computation may not need gradients, while one intermediate step might need sensitivity analysis. A debugging branch may also need to compute a temporary gradient. Without `enable_grad()`, the code would need to be split apart or the outer state would need to be switched repeatedly. With it, recording can be restored exactly where it is needed.
 
-There is also a more general interface, `torch.set_grad_enabled()`, which accepts a boolean and directly sets the current gradient mode. `no_grad()` and `enable_grad()` are special cases of this interface.
+PyTorch also provides a more general interface, `torch.set_grad_enabled()`. It takes a boolean and sets the current gradient mode directly. `no_grad()` and `enable_grad()` are common special cases of this interface.
 
 ```{python}
 x = torch.randn(10, 6)
@@ -142,30 +142,30 @@ with torch.set_grad_enabled(is_training):
     y_pred = model(x)
 ```
 
-When `is_training=True`, this is equivalent to `enable_grad()`. When `is_training=False`, it is equivalent to `no_grad()`. This makes conditional control cleaner and more unified.
+When `is_training=True`, this behaves like `enable_grad()`. When `is_training=False`, it behaves like `no_grad()`. This is often a clean way to share logic between training and evaluation branches.
 
-So far, we have introduced two common gradient-control contexts: `no_grad()` and `enable_grad()`. They disable and enable gradient recording, and they can be nested into a flexible stack-based management system. Next, we introduce a context designed specifically for inference optimization: `torch.inference_mode()`, which goes further than `no_grad()` in performance and memory efficiency.
+So far, we have introduced two common gradient-control contexts: `no_grad()` disables recording, and `enable_grad()` restores it. Because they nest cleanly, they form a flexible stack-based control system. Next, we turn to `torch.inference_mode()`, a context designed specifically for inference optimization that goes beyond `no_grad()` in both performance and memory behavior.
 
 ## 2.3.3 `torch.inference_mode()`: Stop Recording for Good
 
-The previous two sections gave us a flexible mechanism:
+The previous two sections gave us a fairly flexible mechanism:
 
 - `no_grad()` disables gradient recording.
 - `enable_grad()` locally restores gradient recording.
 - `set_grad_enabled()` is a general interface for setting the current gradient mode.
 - Gradient modes can be nested and restored.
 
-At first glance, this seems sufficient. Why does PyTorch provide another tool, `inference_mode()`?
+At first glance, that sounds like enough. Why does PyTorch need another tool called `inference_mode()`?
 
-The answer is a deeper question: if we know not only that gradients are unnecessary now, but also that this computation will never participate in backpropagation, can the framework be more aggressive and remove all gradient-related overhead?
+The reason is a stronger assumption: if we know not only that gradients are unnecessary now, but also that the results will never be used for backpropagation, can the framework remove even more gradient-related overhead?
 
 This is the motivation behind `inference_mode()`[^1].
 
-In `no_grad()` mode, PyTorch still maintains version counters, view tracking, and internal checks that ensure gradient correctness. These mechanisms are necessary during training. They prevent in-place operations from corrupting graph structure and guard against shared-memory view issues. But during pure inference, they are extra overhead. If the result will never be used for gradient computation, the framework can skip these gradient-related checks and tracking, achieving more aggressive memory optimization. Therefore, `inference_mode()` is usually faster and more memory-efficient than `no_grad()`.
+In `no_grad()` mode, PyTorch still maintains version counters, view tracking, and internal checks that protect gradient correctness. These mechanisms matter during training because they prevent in-place operations from damaging graph structure and guard against shared-memory view problems. In pure inference, however, they become extra overhead. If a result will never be used for gradient computation, the framework can skip more of this tracking and perform more aggressive memory optimization. As a result, `inference_mode()` is usually faster and more memory-efficient than `no_grad()`.
 
 But it is irreversible.
 
-We know that a tensor created inside `no_grad()` can later have gradients enabled:
+As shown earlier, a tensor created inside `no_grad()` can still have gradients enabled later:
 
 [^1]: `inference_mode()` was introduced in PyTorch 1.9 for inference-stage performance optimization. For implementation details, see [RFC-0011-InferenceMode](https://github.com/ailzhang/rfcs/blob/rfc0011/RFC-0011-InferenceMode.md).
 
@@ -177,7 +177,7 @@ x.requires_grad_()  # we can still enable gradients for x
 print('`x.requires_grad` after `requires_grad_`:', x.requires_grad)
 ```
 
-But if a tensor is created inside `inference_mode()` and we try to set `requires_grad=True`, PyTorch raises an error:
+But if a tensor is created inside `inference_mode()` and we later try to set `requires_grad=True`, PyTorch raises an error:
 
 ```{python}
 with torch.inference_mode():
@@ -189,35 +189,35 @@ except RuntimeError as err:
     print('RuntimeError:', err)
 ```
 
-This is because `inference_mode()` does not merely pause recording. It creates special inference tensors. These tensors are marked as never entering the Autograd system. Even if gradient mode is later enabled, they will not be added to a computation graph. So `no_grad()` is a temporary shutdown, while `inference_mode()` is a permanent shutdown. If we are certain that a block of code is only for inference, `inference_mode()` is appropriate.
+This happens because `inference_mode()` does more than pause recording. It creates special inference tensors that are marked as never entering the Autograd system. Even if gradient mode is enabled later, they will not be added to a computation graph. So `no_grad()` is a temporary shutdown, while `inference_mode()` is much closer to a permanent shutdown. It is appropriate when a code block is guaranteed to be inference-only.
 
 ## 2.3.4 Behavior Comparison Across Gradient Modes
 
-At this point, we have seen three different gradient semantics: default mode, `no_grad()` mode, and `inference_mode()` mode. They represent different strengths of semantic commitment and different performance tradeoffs.
+At this point, we have three different gradient semantics: default mode, `no_grad()` mode, and `inference_mode()` mode. Each one expresses a different strength of commitment and leads to a different tradeoff between flexibility and performance.
 
-In the default mode, Autograd must assume that any current computation may participate in backpropagation. Therefore, it will:
+In the default mode, Autograd must assume that any current computation might later participate in backpropagation. Therefore, it will:
 
 - Build a complete computation graph.
 - Save intermediate results needed for backpropagation.
 - Maintain version counters and view consistency checks.
 
-This mode is flexible but has the highest cost. It is usually used for the forward pass during model training.
+This mode is the most flexible, but it also has the highest cost. It is usually used for the forward pass during training.
 
-When we enter `no_grad()`, we make a temporary statement: this block of computation does not participate in backpropagation right now.
+Entering `no_grad()` makes a temporary statement: this block of computation is not participating in backpropagation right now.
 
-In this mode, Autograd can optimize by:
+With that statement, Autograd can optimize by:
 
 - Not building a computation graph.
 - Not saving intermediate results.
 - Still retaining internal consistency mechanisms for Autograd.
 - Restoring the normal gradient mode after exiting the context.
 
-This is a temporary shutdown. It remains flexible, but performance improves noticeably. It is mostly used in validation or model evaluation.
+This is a temporary shutdown. Flexibility remains, but performance improves noticeably. It is commonly used for validation and model evaluation.
 
-`inference_mode()` makes a stronger commitment: this block of computation will never participate in gradient computation. Based on that premise, Autograd can optimize more aggressively:
+`inference_mode()` makes a stronger commitment: this block of computation will never participate in gradient computation. Under that premise, Autograd can optimize more aggressively:
 
 - It does not build a computation graph.
 - It skips gradient-related version checks and view tracking.
 - Tensors created in this mode cannot re-enter the Autograd system.
 
-This is an irreversible shutdown. It gives the strongest optimization, but also has the most restrictions. It is suitable for pure inference, model evaluation, and data processing.
+This is the least reversible form of shutdown. It gives the strongest optimization, but also imposes the most restrictions. It is suitable for pure inference, model evaluation, and data processing.
