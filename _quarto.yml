@@ -30,6 +30,7 @@ format:
 
 website:
   title: Deep-Learning-From-Scratch-Notes
+  favicon: assets/favicon.svg
   search: true
   back-to-top-navigation: false
   page-navigation: true
