@@ -25,6 +25,8 @@ Per `_quarto.yml`: `execute.eval: false` — code blocks in `.qmd` are NOT execu
 
 ### Python package (`deep_learning/`)
 
+Conda environment for this project: `cs_hw`. Run all Python commands through it, e.g. `conda run -n cs_hw python ...`.
+
 ```bash
 cd deep_learning
 python -m pip install -e ".[test]"          # editable install with pytest

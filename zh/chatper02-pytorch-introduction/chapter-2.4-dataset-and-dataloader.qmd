@@ -5,7 +5,7 @@ date-modified: 2026-06-17
 open-graph:
   title: chapter-2.4-dataset-and-dataloader
   description: "Data Loading in PyTorch: Dataset, DataLoader, and Batching"
-title: "Chapter2.4 PyTorch 中的数据加载：Dataset、DataLoader 与批处理"
+title: "Chapter 2.4 PyTorch 中的数据加载：Dataset、DataLoader 与批处理"
 order: 4
 ---
 
@@ -57,7 +57,7 @@ if device is None:
 print('Using device:', device)
 ```
 
-## 2.3.1 Dataset：用统一接口访问样本
+## 2.4.1 Dataset：用统一接口访问样本
 
 训练循环里，我们通常不是一次性把所有数据都喂给模型，而是每次取出一个 mini-batch：
 
@@ -140,7 +140,7 @@ print('First target shape:', y0.shape)
 
 到这里，单个样本的访问问题已经解决。训练时通常不会一次只喂一个样本给模型，而是把样本组织成 mini-batch，这部分由 DataLoader 负责。
 
-## 2.3.2 DataLoader：把样本组织成 mini-batch
+## 2.4.2 DataLoader：把样本组织成 mini-batch
 
 Dataset 本身只知道如何取单个样本。DataLoader 则进一步负责把这些样本组织成训练循环需要的 mini-batch。
 
@@ -185,7 +185,7 @@ DataLoader: samples -> batch
 
 这也是 PyTorch 将 Dataset 和 DataLoader 分开的原因。前者描述数据本身，后者描述数据如何被送进训练过程。
 
-## 2.3.3 collate_fn：样本如何拼成 batch
+## 2.4.3 collate_fn：样本如何拼成 batch
 
 前面提到，DataLoader 会把多个样本拼成一个 batch。这个“拼”的过程由 `collate_fn` 控制。
 
@@ -270,7 +270,7 @@ for tokens, lengths in dataloader:
 
 因此，`collate_fn` 可以理解为 DataLoader 的“打包规则”。默认规则适合形状一致的张量；样本结构更复杂时，需要明确告诉 PyTorch 这个 batch 应该如何组装。
 
-## 2.3.4 num_workers：让数据加载和模型计算并行
+## 2.4.4 num_workers：让数据加载和模型计算并行
 
 到目前为止，我们的 DataLoader 都是在主进程里加载数据。也就是说，模型训练和数据读取是在同一个 Python 进程里交替进行的：
 
@@ -331,7 +331,7 @@ if __name__ == '__main__':
 由于 Jupyter Notebook 的特殊性，在 notebook 环境里使用 `num_workers>0` 可能会遇到一些额外的麻烦。因此，如果你是在 notebook 里调试代码，请不要使用 `num_workers>0`。
 :::
 
-## 2.3.5 persistent_workers：让 worker 不要每个 epoch 都重启
+## 2.4.5 persistent_workers：让 worker 不要每个 epoch 都重启
 
 当 `num_workers>0` 时，DataLoader 会启动多个 worker 进程。默认情况下，一个 epoch 迭代结束后，这些 worker 进程会被关闭；下一个 epoch 开始时，再重新创建 worker。
 
@@ -362,7 +362,7 @@ dataloader = utils.DataLoader(
 
 如果训练有很多 epoch，并且 `num_workers>0`，可以尝试打开 `persistent_workers=True`。如果只是调试、小数据实验，或者内存比较紧张，保持默认值也完全可以。
 
-## 2.3.6 pin_memory：要不要把 batch 放进锁页内存
+## 2.4.6 pin_memory：要不要把 batch 放进锁页内存
 
 ::: {.callout-tip}
 如果要继续了解 `pin_memory` 和 `non_blocking` 的细节，以及它们在 benchmark 中的实际效果，可以参考 PyTorch 官方文档的 [A guide on good usage of non_blocking and pin_memory in PyTorch](https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html)。该文分析了 CPU 到 GPU 数据传输的机制，以及在不同场景下 `pin_memory` 和 `non_blocking` 的性能影响。
@@ -417,7 +417,7 @@ y = y.to('cuda', non_blocking=True)
 
 `pin_memory` 不是模型正确性的开关，而是数据传输效率的开关。它解决的问题不是能不能训练，而是 CPU 准备好的 batch 能不能更快送到 GPU。
 
-## 2.3.7 IterableDataset：当数据不能随机访问时
+## 2.4.7 IterableDataset：当数据不能随机访问时
 
 到目前为止，我们默认使用的是最常见的 **map-style dataset**。例如前面写的 `SimpleTensorDataset`，它的特点是可以用下标随机访问：
 
@@ -520,7 +520,7 @@ class ShardedCountingDataset(utils.IterableDataset):
 如果要继续了解 PyTorch 在数据加载上的工程化扩展，可以参考 [torchdata](https://meta-pytorch.org/data/beta/index.html)。目前比较值得关注的方向之一是 `StatefulDataLoader`：它允许数据加载器像模型和优化器一样保存状态。训练在一个 epoch 中途被打断时，不一定只能从 epoch 开头重新开始，而是可以尝试恢复到更接近中断前的位置。
 :::
 
-## 2.3.8 一个更接近训练脚本的 DataLoader 配置
+## 2.4.8 一个更接近训练脚本的 DataLoader 配置
 
 到这里，DataLoader 中几个容易困惑的参数已经基本清楚：
 
@@ -579,7 +579,7 @@ for X, y in dataloader:
 
 按这个思路理解，DataLoader 就不只是一个填写 `batch_size` 的工具，而是训练吞吐量的一部分。
 
-## 2.3.9 本章小结
+## 2.4.9 本章小结
 
 本节从训练循环中的数据问题出发，介绍了 PyTorch 的 Dataset 和 DataLoader。
 

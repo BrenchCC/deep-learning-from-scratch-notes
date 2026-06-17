@@ -20,6 +20,8 @@ This repository combines a Quarto documentation website with a small Python deep
 - `cd deep_learning && pytest`: run the Python test suite.
 - `ruff check .` and `ruff format .`: lint and format Python files according to repository Ruff settings.
 
+Use the `cs_hw` Conda environment for local Python execution when running project scripts or tests through an activated environment.
+
 ## Coding Style & Naming Conventions
 
 Use Quarto Markdown (`.qmd`) for notes and keep chapter paths aligned between `zh/` and `en/` where possible. Write clear section headings, readable math, and concise explanations.
