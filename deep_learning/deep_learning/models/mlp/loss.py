@@ -1,6 +1,6 @@
 # pyright: reportIncompatibleMethodOverride=false
 
-from typing import override
+from typing_extensions import override
 
 import numpy as np
 

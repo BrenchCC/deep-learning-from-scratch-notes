@@ -1,80 +1,12 @@
 project:
-  type: website
-  output-dir: _site
-  render:
-    - "*.qmd"
-    - "zh/**/*.qmd"
-    - "en/**/*.qmd"
+  type: default
 
-author: brench
+author: Brench
 date: today
 date-format: iso
 bibliography: [refs_article.bib, refs_media.bib]
+quarto-required: ">=1.9.0"
 
 execute:
   eval: false
   freeze: false
-
-format:
-  html:
-    theme: cosmo
-    grid:
-      sidebar-width: 250px
-      body-width: 850px
-      margin-width: 250px
-    css: style.css
-    toc: true
-    syntax-highlighting: github
-    code-annotations: hover
-    license: CC BY-NC
-
-website:
-  title: Deep-Learning-From-Scratch-Notes
-  favicon: assets/favicon.svg
-  search: true
-  back-to-top-navigation: false
-  page-navigation: true
-  repo-url: https://github.com/BrenchCC/deep-learning-from-scratch-notes
-  repo-actions: [source, issue, edit]
-  open-graph:
-    locale: en_US
-    site-name: Deep-Learning-From-Scratch-Notes
-  comments:
-    giscus:
-      repo: BrenchCC/deep-learning-from-scratch-notes
-      repo-id: R_kgDOSIPXtQ
-      category: Announcements
-      category-id: DIC_kwDOSIPXtc4C7Uuj
-      mapping: og:title
-      loading: lazy
-      input-position: top
-      language: en
-  navbar:
-    right:
-      - text: 中文
-        href: zh/index.qmd
-      - text: English
-        href: en/index.qmd
-  sidebar:
-    - id: zh
-      style: floating
-      contents:
-        - text: 首页
-          href: zh/index.qmd
-        - section: "Part 1: 深度学习基础"
-          contents:
-            - section: "Chapter 1: 深度学习简介"
-              contents: "zh/chapter01-introduction/*.qmd"
-            - section: "Chapter 2: PyTorch 入门"
-              contents: "zh/chatper02-pytorch-introduction/*.qmd"
-    - id: en
-      style: floating
-      contents:
-        - text: Home
-          href: en/index.qmd
-        - section: "Part 1: Deep Learning Foundations"
-          contents:
-            - section: "Chapter 1: Introduction to Deep Learning"
-              contents: "en/chapter01-introduction/*.qmd"
-            - section: "Chapter 2: Getting Started with PyTorch"
-              contents: "en/chatper02-pytorch-introduction/*.qmd"

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-import dnnlpy.nn as dnn
+import deep_learning.nn as dnn
 
 from .embedding import SinusoidalTimestepEmbedding
 
@@ -61,13 +61,13 @@ class ResBlock(nn.Module):
         self.block2 = ConvBlock(out_channels, out_channels, groups=groups)
         self.time_mlp = nn.Sequential(
             nn.SiLU(),
-            dnn.Linear(time_emb_dim, out_channels),
+            nn.Linear(time_emb_dim, out_channels),
         )
 
         if in_channels != out_channels:
             self.res_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
         else:
-            self.res_conv = dnn.Identity()
+            self.res_conv = nn.Identity()
 
     def forward(self, x: Tensor, t_emb: Tensor) -> Tensor:
         """Apply the residual block to features and timestep embeddings."""
@@ -163,9 +163,9 @@ class UNet2DModel(nn.Module):
         super().__init__()
         self.time_embedding = nn.Sequential(
             SinusoidalTimestepEmbedding(time_emb_dim),
-            dnn.Linear(time_emb_dim, time_emb_dim),
+            nn.Linear(time_emb_dim, time_emb_dim),
             nn.SiLU(),
-            dnn.Linear(time_emb_dim, time_emb_dim),
+            nn.Linear(time_emb_dim, time_emb_dim),
         )
 
         first_ch = block_out_channels[0]

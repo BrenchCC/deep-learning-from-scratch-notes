@@ -1,5 +1,5 @@
 ---
-title: Redirect
+title: Deep-Learning-From-Scratch-Notes
 format: html
 ---
 

@@ -2,9 +2,9 @@
 
 import torchvision.datasets as datasets
 
-import dnnlpy
+import deep_learning
 
-ROOT = dnnlpy.get_data_root()
+ROOT = deep_learning.get_data_root()
 
 
 class DatasetDownloadError(RuntimeError):

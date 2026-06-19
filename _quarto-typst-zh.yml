@@ -1,0 +1,50 @@
+project:
+  type: book
+  output-dir: "_typst/zh"
+  render:
+    - "*.qmd"
+    - "zh/**/*.qmd"
+  post-render:
+    - "utils/rename_pdf.py"
+
+execute:
+  enabled: false
+
+format:
+  typst:
+    lang: zh
+    toc: true
+    toc-depth: 2
+    toc-indent: 0em
+    wrap: none
+    engine: jupyter
+    papersize: a4
+    fig-cap-location: bottom
+    tbl-cap-location: top
+    code-annotations: below
+    citeproc: true
+    bibliographystyle: ieee
+    citation-location: document
+    syntax-highlighting: idiomatic
+    include-before-body:
+      - "utils/typst-header-zh.typ"
+
+book:
+  chapters:
+    - index.qmd
+    - part: "Chapter 1: 深度学习简介"
+      chapters:
+        - "zh/chapter01-introduction/chapter-1.1-neural-network.qmd"
+    - part: "Chapter 2: PyTorch 入门"
+      chapters:
+        - "zh/chatper02-pytorch-introduction/chapter-2.1-automatic-differentiation.qmd"
+        - "zh/chatper02-pytorch-introduction/chapter-2.2-dim-transform-appendix.qmd"
+        - "zh/chatper02-pytorch-introduction/chapter-2.3-auto-grad-contexts.qmd"
+        - "zh/chatper02-pytorch-introduction/chapter-2.4-dataset-and-dataloader.qmd"
+        - "zh/chatper02-pytorch-introduction/chapter-2.5-nn-module.qmd"
+        - "zh/chatper02-pytorch-introduction/chapter-2.6-optimizer.qmd"
+        - "zh/chatper02-pytorch-introduction/chapter-2.7-training-loop.qmd"
+        - "zh/chatper02-pytorch-introduction/chapter-2.8-checkpoints-resuming.qmd"
+    - part: "Chapter 8: Attention 与 Transformer：从动态检索到序列建模"
+      chapters:
+        - "zh/chapter08-attention-and-transformers/chapter-8.1-bahdanau-attention.qmd"

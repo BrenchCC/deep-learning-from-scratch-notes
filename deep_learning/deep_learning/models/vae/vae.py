@@ -6,8 +6,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-import dnnlpy.nn as dnn
-
 __all__ = ['VAE']
 
 
@@ -33,16 +31,16 @@ class VAE(nn.Module):
         input_dim = math.prod(input_shape)
         self.encoder = nn.Sequential(
             nn.Flatten(),
-            dnn.Linear(input_dim, hidden_dim),
-            dnn.ReLU(),
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
         )
-        self.fc_mu = dnn.Linear(hidden_dim, latent_dim)
-        self.fc_logvar = dnn.Linear(hidden_dim, latent_dim)
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
         self.decoder = nn.Sequential(
-            dnn.Linear(latent_dim, hidden_dim),
-            dnn.ReLU(),
-            dnn.Linear(hidden_dim, input_dim),
-            dnn.Sigmoid(),
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_dim),
+            nn.Sigmoid(),
             nn.Unflatten(1, input_shape),
         )
 

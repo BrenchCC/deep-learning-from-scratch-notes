@@ -7,10 +7,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 QUARTO_CONFIG = ROOT / '_quarto-html.yml'
-TITLE = 'Deep Learning Notes'
+TITLE = 'Deep-Learning-From-Scratch-Notes'
 
 FRONT_MATTER_TITLE_RE = re.compile(r'^title:\s*(?P<title>.+?)\s*$')
-NUMBER_RE = re.compile(r'ch(?P<chapter>\d+)\.(?P<section>\d+)')
+NUMBER_RE = re.compile(r'(?:ch|chapter-)(?P<chapter>\d+)[.-](?P<section>\d+)')
 
 
 def strip_yaml_string(value: str) -> str:

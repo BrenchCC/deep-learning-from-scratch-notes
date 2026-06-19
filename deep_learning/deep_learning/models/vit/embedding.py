@@ -3,8 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-import dnnlpy.nn as dnn
-
 __all__ = [
     'ViTLinearPatchEmbedding',
     'ViTConvPatchEmbedding',
@@ -40,7 +38,7 @@ class ViTLinearPatchEmbedding(nn.Module):
         self.num_patches = (image_size // patch_size) ** 2
 
         self.unfold = nn.Unfold(kernel_size=patch_size, stride=patch_size)
-        self.proj = dnn.Linear(in_channels * patch_size * patch_size, embed_dim)
+        self.proj = nn.Linear(in_channels * patch_size * patch_size, embed_dim)
 
     def forward(self, x: Tensor) -> Tensor:
         """Convert images of shape ``(batch, channels, height, width)`` to patch tokens."""

@@ -1,0 +1,47 @@
+project:
+  type: book
+  output-dir: "_typst/en"
+  render:
+    - "*.qmd"
+    - "en/**/*.qmd"
+  post-render:
+    - "utils/rename_pdf.py"
+
+execute:
+  enabled: false
+
+format:
+  typst:
+    lang: en
+    toc: true
+    toc-depth: 2
+    toc-indent: 0em
+    wrap: none
+    engine: jupyter
+    papersize: a4
+    fig-cap-location: bottom
+    tbl-cap-location: top
+    code-annotations: below
+    citeproc: true
+    bibliographystyle: ieee
+    citation-location: document
+    syntax-highlighting: idiomatic
+    include-before-body:
+      - "utils/typst-header-en.typ"
+
+book:
+  chapters:
+    - index.qmd
+    - part: "Chapter 1: Introduction to Deep Learning"
+      chapters:
+        - "en/chapter01-introduction/chapter-1.1-neural-network.qmd"
+    - part: "Chapter 2: Getting Started with PyTorch"
+      chapters:
+        - "en/chatper02-pytorch-introduction/chapter-2.1-automatic-differentiation.qmd"
+        - "en/chatper02-pytorch-introduction/chapter-2.2-dim-transform-appendix.qmd"
+        - "en/chatper02-pytorch-introduction/chapter-2.3-auto-grad-contexts.qmd"
+        - "en/chatper02-pytorch-introduction/chapter-2.4-dataset-and-dataloader.qmd"
+        - "en/chatper02-pytorch-introduction/chapter-2.5-nn-module.qmd"
+        - "en/chatper02-pytorch-introduction/chapter-2.6-optimizer.qmd"
+        - "en/chatper02-pytorch-introduction/chapter-2.7-training-loop.qmd"
+        - "en/chatper02-pytorch-introduction/chapter-2.8-checkpoints-resuming.qmd"

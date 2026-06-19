@@ -9,8 +9,6 @@ title: "Chapter 2.8 Checkpoints in PyTorch: Resuming Training After Interruption
 order: 8
 ---
 
-[![](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jshn9515/dnnl-notebooks/blob/main/zh/ch2-pytorch-introduction/ch2.7-checkpoint-resuming.ipynb){fig-align="left"}
-
 The previous section organized a training template that will be reused later. It connects the model, data, optimizer, and evaluation metrics, so later experiments do not need to repeat the same boilerplate code.
 
 However, that template does not yet handle a practical issue: **training can be interrupted**.
@@ -33,8 +31,8 @@ This section uses MNIST for a small experiment: train for a few epochs, simulate
 import signal
 from pathlib import Path
 
-import dnnlpy
-import dnnlpy.trainingtools as dt
+import deep_learning
+import deep_learning.trainingtools as dt
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -94,15 +92,15 @@ To demonstrate checkpoints, first define a simple MLP and train it on MNIST.
 As in the previous section, set the random seed and get the current default device:
 
 ```{python}
-dnnlpy.set_seed(42)
-device = dnnlpy.get_default_device()
+deep_learning.set_seed(42)
+device = deep_learning.get_default_device()
 print('Using device:', device)
 ```
 
 Then load the MNIST dataset and split out a validation set:
 
 ```{python}
-root = dnnlpy.get_data_root()
+root = deep_learning.get_data_root()
 transform = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
 ds_rng = torch.Generator().manual_seed(42)
 
@@ -234,8 +232,8 @@ Newer PyTorch versions recommend using `weights_only=True` when loading checkpoi
 Now train for a few epochs and save a checkpoint during the run.
 
 ```{python}
-checkpoint_path = Path(dnnlpy.get_data_root()) / 'mnist-mlp-checkpoint.pt'
-device = dnnlpy.get_default_device()
+checkpoint_path = Path(deep_learning.get_data_root()) / 'mnist-mlp-checkpoint.pt'
+device = deep_learning.get_default_device()
 
 model, loss_fn, optimizer, metric, val_metric = create_training_objects(lr=0.001)
 history = []

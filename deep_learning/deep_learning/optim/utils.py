@@ -8,7 +8,7 @@ from torch import Tensor
 
 from .base import Optimizer
 
-type Loss = Callable[[Tensor], Tensor]
+Loss = Callable[[Tensor], Tensor]
 
 __all__ = [
     'run_optimizer',

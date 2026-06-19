@@ -1,7 +1,7 @@
 import torch.nn as nn
 from torch import Tensor
 
-import dnnlpy.nn as dnn
+import deep_learning.nn as dnn
 
 from .embedding import ViTEmbedding
 
@@ -36,10 +36,10 @@ class ViTMLP(nn.Module):
         super().__init__()
         hidden_dim = hidden_dim or embed_dim * 4
         self.net = nn.Sequential(
-            dnn.Linear(embed_dim, hidden_dim),
+            nn.Linear(embed_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            dnn.Linear(hidden_dim, embed_dim),
+            nn.Linear(hidden_dim, embed_dim),
             nn.Dropout(dropout),
         )
 
@@ -217,7 +217,7 @@ class ViTClassificationHead(nn.Module):
             num_classes (int): Number of output classes.
         """
         super().__init__()
-        self.head = dnn.Linear(embed_dim, num_classes)
+        self.head = nn.Linear(embed_dim, num_classes)
 
     def forward(self, x: Tensor) -> Tensor:
         """Return class logits from the first token of each sequence."""

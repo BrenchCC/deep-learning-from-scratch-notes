@@ -18,3 +18,130 @@ open-graph:
   title: Deep-Learning-From-Scratch-Notes
   description: "Deep-Learning-From-Scratch-Notes: Table of Contents"
 ---
+
+<script id="academic-home-data" type="application/json">
+{
+  "kicker": "Modern Academic Notes",
+  "title": "从零开始深度学习笔记",
+  "lead": "这套笔记把数学推导、手写实现与 PyTorch 工程实践放在同一个阅读路径里：先看清公式，再把每一步落到可运行的代码。",
+  "labels": {
+    "all": "全部",
+    "parts": "部分",
+    "chapters": "章节",
+    "topics": "主题",
+    "mapTitle": "学习地图",
+    "filter": "筛选章节",
+    "read": "进入章节",
+    "derivationTitle": "推导视角"
+  },
+  "parts": [
+    {
+      "id": "foundation",
+      "shortTitle": "基础",
+      "chapters": [
+        {
+          "title": "1.1 神经网络：一个可学习的函数",
+          "summary": "从函数逼近视角理解神经网络，把参数、层和非线性统一到一个可学习映射中。",
+          "href": "chapter01-introduction/chapter-1.1-neural-network.html",
+          "tags": ["函数", "参数", "非线性"]
+        },
+        {
+          "title": "2.1 PyTorch 中的自动微分",
+          "summary": "用计算图理解反向传播，关注张量、梯度和叶子节点在训练循环中的角色。",
+          "href": "chatper02-pytorch-introduction/chapter-2.1-automatic-differentiation.html",
+          "tags": ["autograd", "梯度", "计算图"]
+        },
+        {
+          "title": "2.2 PyTorch 维度变换操作函数",
+          "summary": "把 reshape、view、permute 等操作放在张量布局的语境里理解。",
+          "href": "chatper02-pytorch-introduction/chapter-2.2-dim-transform-appendix.html",
+          "tags": ["tensor", "shape", "layout"]
+        },
+        {
+          "title": "2.3 PyTorch 中的梯度记录与控制",
+          "summary": "比较训练、推理、冻结参数时不同梯度模式的行为边界。",
+          "href": "chatper02-pytorch-introduction/chapter-2.3-auto-grad-contexts.html",
+          "tags": ["no_grad", "inference", "上下文"]
+        },
+        {
+          "title": "2.4 Dataset、DataLoader 与批处理",
+          "summary": "从样本协议到批处理管线，组织可复现的数据读取流程。",
+          "href": "chatper02-pytorch-introduction/chapter-2.4-dataset-and-dataloader.html",
+          "tags": ["data", "batch", "pipeline"]
+        },
+        {
+          "title": "2.5 nn.Module：组织模型、参数与状态",
+          "summary": "理解模块树、参数注册、缓冲区和 forward 调用之间的关系。",
+          "href": "chatper02-pytorch-introduction/chapter-2.5-nn-module.html",
+          "tags": ["module", "state", "parameter"]
+        },
+        {
+          "title": "2.6 Optimizer：从手动更新到状态管理",
+          "summary": "用优化器状态解释学习率、动量和参数组如何影响训练过程。",
+          "href": "chatper02-pytorch-introduction/chapter-2.6-optimizer.html",
+          "tags": ["optimizer", "state", "lr"]
+        },
+        {
+          "title": "2.7 训练循环：连接数据、模型和优化器",
+          "summary": "把前向、损失、反向、更新和评估组织成稳定的训练闭环。",
+          "href": "chatper02-pytorch-introduction/chapter-2.7-training-loop.html",
+          "tags": ["training", "loss", "loop"]
+        },
+        {
+          "title": "2.8 Checkpoint：中断训练后如何继续",
+          "summary": "保存模型、优化器、随机状态和训练进度，让实验可以恢复与复现。",
+          "href": "chatper02-pytorch-introduction/chapter-2.8-checkpoints-resuming.html",
+          "tags": ["checkpoint", "resume", "reproducibility"]
+        }
+      ]
+    },
+    {
+      "id": "attention",
+      "shortTitle": "Attention",
+      "chapters": [
+        {
+          "title": "8.1 Bahdanau Attention：从信息压缩到动态检索",
+          "summary": "从 encoder-decoder 的瓶颈出发，推导 query-key-value 的动态检索直觉。",
+          "href": "chapter08-attention-and-transformers/chapter-8.1-bahdanau-attention.html",
+          "tags": ["attention", "seq2seq", "alignment"]
+        }
+      ]
+    }
+  ],
+  "modes": [
+    {
+      "id": "formula",
+      "mark": "F",
+      "label": "公式",
+      "title": "先写出对象之间的关系",
+      "body": "每个主题先固定符号、张量形状和目标函数，让公式不只是结论，而是后面代码实现的接口。"
+    },
+    {
+      "id": "diagram",
+      "mark": "D",
+      "label": "图解",
+      "title": "再画出数据如何流动",
+      "body": "把层、张量、梯度和状态画成可追踪的流程，帮助定位每一步究竟改变了什么。"
+    },
+    {
+      "id": "code",
+      "mark": "C",
+      "label": "代码",
+      "title": "最后落到最小可运行实现",
+      "body": "实现优先保持短小和可读，先确认行为，再讨论工程化封装。",
+      "code": "loss.backward()\noptimizer.step()\noptimizer.zero_grad()"
+    }
+  ]
+}
+</script>
+
+<div id="academic-home-app" class="academic-home"></div>
+
+<noscript>
+<div class="academic-noscript">
+  <p>学习地图需要 JavaScript；下面的静态目录仍可直接阅读。</p>
+</div>
+</noscript>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="../assets/js/academic-home.js"></script>

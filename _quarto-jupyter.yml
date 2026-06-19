@@ -1,0 +1,18 @@
+project:
+  type: default
+  output-dir: _jupyter
+  render:
+    - "*.qmd"
+    - "zh/**/*.qmd"
+    - "en/**/*.qmd"
+  post-render:
+    - "utils/clean_attachments.py"
+    - "utils/add_image_attrs.py"
+
+execute:
+  enabled: false
+
+format:
+  ipynb:
+    toc: true
+    wrap: none

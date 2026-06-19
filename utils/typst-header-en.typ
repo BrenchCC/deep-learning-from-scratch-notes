@@ -1,9 +1,9 @@
 #import "@preview/showybox:2.0.4": showybox
 
 #set document(
-    title: "Deep Learning Notes",
-    author: "jshn9515",
-    description: "A collection of notes and code examples for deep learning concepts and techniques.",
+    title: "Deep-Learning-From-Scratch-Notes",
+    author: "Brench",
+    description: "Modern academic notes for learning deep learning from first principles.",
     keywords: (
         "Deep Learning Tutorial",
         "PyTorch",

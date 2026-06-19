@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / '_quarto-typst-en.yml'
 BOOK_MARKER = 'book:'
-NUMBER_RE = re.compile(r'ch(?P<chapter>\d+)\.(?P<section>\d+)')
+NUMBER_RE = re.compile(r'(?:ch|chapter-)(?P<chapter>\d+)[.-](?P<section>\d+)')
 
 TOC = [
     'book:',
@@ -14,37 +14,10 @@ TOC = [
     '    - index.qmd',
     '    - part: "Chapter 1: Introduction to Deep Learning"',
     '      chapters:',
-    '        - "en/ch1-introduction/*.qmd"',
+    '        - "en/chapter01-introduction/*.qmd"',
     '    - part: "Chapter 2: Getting Started with PyTorch"',
     '      chapters:',
-    '        - "en/ch2-pytorch-introduction/*.qmd"',
-    '    - part: "Chapter 3: Multi-Layer Perceptron: From Single Layer to Deep Nonlinear Modeling"',
-    '      chapters:',
-    '        - "en/ch3-multi-layer-perceptron/*.qmd"',
-    '    - part: "Chapter 4: Optimization Algorithms: How Neural Networks Update Parameters"',
-    '      chapters:',
-    '        - "en/ch4-optimization-algorithms/*.qmd"',
-    '    - part: "Chapter 8: Attention and Transformer: From Dynamic Retrieval to Sequence Modeling"',
-    '      chapters:',
-    '        - "en/ch8-attention-and-transformer/*.qmd"',
-    '    - part: "Chapter 10: Efficient Attention Implementations: From Memory-Efficient Attention to FlashAttention"',
-    '      chapters:',
-    '        - "en/ch10-efficient-attention/*.qmd"',
-    '    - part: "Chapter 11: Vision Transformer: From Image Classification to Visual Sequence Modeling"',
-    '      chapters:',
-    '        - "en/ch11-vision-transformers/*.qmd"',
-    '    - part: "Chapter 12: GAN: Learning to Generate through Adversarial Training"',
-    '      chapters:',
-    '        - "en/ch12-generative-adversarial-networks/*.qmd"',
-    '    - part: "Chapter 13: VAE: From Compression and Reconstruction to Probabilistic Generation"',
-    '      chapters:',
-    '        - "en/ch13-autoencoders-and-vaes/*.qmd"',
-    '    - part: "Chapter 14: Diffusion Models: From Denoising to Generation"',
-    '      chapters:',
-    '        - "en/ch14-diffusion-models/*.qmd"',
-    '    - part: "Chapter 15: Vision-Language Models: From Image-Text Alignment to Multimodal Dialogue"',
-    '      chapters:',
-    '        - "en/ch15-vision-language-models/*.qmd"',
+    '        - "en/chatper02-pytorch-introduction/*.qmd"',
 ]
 
 

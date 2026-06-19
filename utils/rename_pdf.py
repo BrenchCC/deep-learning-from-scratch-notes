@@ -7,8 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TYPST_DIR = ROOT / '_typst'
 
 PDFS = {
-    'zh': 'deep-learning-notes-zh.pdf',
-    'en': 'deep-learning-notes-en.pdf',
+    'zh': 'deep-learning-from-scratch-notes-zh.pdf',
+    'en': 'deep-learning-from-scratch-notes-en.pdf',
 }
 
 
@@ -22,6 +22,7 @@ def move_pdf(language: str, target_name: str) -> None:
         return
 
     candidates = [
+        language_dir / 'deep-learning-from-scratch-notes.pdf',
         language_dir / 'deep-learning-notes.pdf',
         language_dir / target_name,
     ]

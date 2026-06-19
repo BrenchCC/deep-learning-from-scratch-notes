@@ -3,7 +3,7 @@ import math
 import torch.nn as nn
 from torch import Tensor
 
-import dnnlpy.nn as dnn
+import deep_learning.nn as dnn
 
 __all__ = ['Seq2SeqTransformer']
 
@@ -51,7 +51,7 @@ class Seq2SeqTransformer(nn.Module):
             dropout=dropout,
             norm_first=True,  # Pre-LN Transformer
         )
-        self.output_proj = dnn.Linear(d_model, tgt_vocab_size)
+        self.output_proj = nn.Linear(d_model, tgt_vocab_size)
 
     def forward(
         self,

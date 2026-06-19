@@ -427,4 +427,6 @@ __marimo__/
 
 /.quarto/
 /_site/
+/_jupyter/
+/_typst/
 **/*.quarto_ipynb

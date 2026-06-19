@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import override
+from typing_extensions import override
 
 import torch
 from torch import Tensor

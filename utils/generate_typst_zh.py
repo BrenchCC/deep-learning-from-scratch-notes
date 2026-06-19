@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / '_quarto-typst-zh.yml'
 BOOK_MARKER = 'book:'
-NUMBER_RE = re.compile(r'ch(?P<chapter>\d+)\.(?P<section>\d+)')
+NUMBER_RE = re.compile(r'(?:ch|chapter-)(?P<chapter>\d+)[.-](?P<section>\d+)')
 
 TOC = [
     'book:',
@@ -14,38 +14,13 @@ TOC = [
     '    - index.qmd',
     '    - part: "Chapter 1: 深度学习简介"',
     '      chapters:',
-    '        - "zh/ch1-introduction/ch1.1-neural-network.qmd"',
-    '        - "zh/ch1-introduction/ch1.3-computation-graph.qmd"',
+    '        - "zh/chapter01-introduction/*.qmd"',
     '    - part: "Chapter 2: PyTorch 入门"',
     '      chapters:',
-    '        - "zh/ch2-pytorch-introduction/*.qmd"',
-    '    - part: "Chapter 3: 多层感知机：从单层到深层的非线性建模"',
-    '      chapters:',
-    '        - "zh/ch3-multi-layer-perceptron/*.qmd"',
-    '    - part: "Chapter 4: 优化算法：神经网络如何更新参数"',
-    '      chapters:',
-    '        - "zh/ch4-optimization-algorithms/*.qmd"',
+    '        - "zh/chatper02-pytorch-introduction/*.qmd"',
     '    - part: "Chapter 8: Attention 与 Transformer：从动态检索到序列建模"',
     '      chapters:',
-    '        - "zh/ch8-attention-and-transformer/*.qmd"',
-    '    - part: "Chapter 10: 高效 Attention 实现：从 Memory-Efficient Attention 到 FlashAttention"',
-    '      chapters:',
-    '        - "zh/ch10-efficient-attention/*.qmd"',
-    '    - part: "Chapter 11: Vision Transformer：从图像分类到视觉序列建模"',
-    '      chapters:',
-    '        - "zh/ch11-vision-transformers/*.qmd"',
-    '    - part: "Chapter 12: GAN：在对抗中学习生成"',
-    '      chapters:',
-    '        - "zh/ch12-generative-adversarial-networks/*.qmd"',
-    '    - part: "Chapter 13: VAE：从压缩重建到概率生成"',
-    '      chapters:',
-    '        - "zh/ch13-autoencoders-and-vaes/*.qmd"',
-    '    - part: "Chapter 14: Diffusion Models：从去噪到生成"',
-    '      chapters:',
-    '        - "zh/ch14-diffusion-models/*.qmd"',
-    '    - part: "Chapter 15: 视觉语言模型：从图文对齐到多模态对话"',
-    '      chapters:',
-    '        - "zh/ch15-vision-language-models/*.qmd"',
+    '        - "zh/chapter08-attention-and-transformers/*.qmd"',
 ]
 
 

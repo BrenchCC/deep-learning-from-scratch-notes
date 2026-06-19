@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import override
+from typing_extensions import override
 
 from .base import Optimizer, Parameter
 
