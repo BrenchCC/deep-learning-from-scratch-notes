@@ -5,8 +5,6 @@ project:
     - "*.qmd"
     - "zh/**/*.qmd"
     - "en/**/*.qmd"
-  resources:
-    - "assets/js/academic-home.js"
   post-render:
     - "utils/clean_checkpoints.py"
     - "utils/generate_toc.py"
@@ -54,15 +52,13 @@ website:
   navbar:
     right:
       - text: 中文
-        href: zh/index.qmd
+        href: zh/
       - text: English
-        href: en/index.qmd
+        href: en/
   sidebar:
     - id: zh
       style: floating
       contents:
-        - text: 首页
-          href: zh/index.qmd
         - section: "Part 1: 深度学习基础"
           contents:
             - section: "Chapter 1: 深度学习简介"
@@ -76,8 +72,6 @@ website:
     - id: en
       style: floating
       contents:
-        - text: Home
-          href: en/index.qmd
         - section: "Part 1: Deep Learning Fundamentals"
           contents:
             - section: "Chapter 1: Introduction to Deep Learning"

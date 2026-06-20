@@ -1,5 +1,5 @@
 ---
-title: 从零开始深度学习笔记
+title: "Part 4：Attention 机制与 Transformer"
 author: Brench
 date: 2026-05-08
 date-modified: today
@@ -8,13 +8,13 @@ comments: false
 
 listing:
   contents:
-    - "index-parts/part*.qmd"
+    - "../chapter08-attention-and-transformers/*.qmd"
   sort: title asc
   type: table
   fields: [title, author, date]
   date-format: iso
 
 open-graph:
-  title: Deep-Learning-From-Scratch-Notes
-  description: "Deep-Learning-From-Scratch-Notes: Table of Contents"
+  title: part4-attention-and-transformer
+  description: "Part 4: Attention 机制与 Transformer"
 ---

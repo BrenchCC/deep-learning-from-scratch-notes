@@ -3,12 +3,12 @@ title: Deep-Learning-From-Scratch-Notes
 author: Brench
 date: 2026-05-08
 date-modified: today
+page-layout: full
 comments: false
 
 listing:
   contents:
-    - chapter01-introduction/*.qmd
-    - chatper02-pytorch-introduction/*.qmd
+    - "index-parts/part*.qmd"
   sort: title asc
   type: table
   fields: [title, author, date]
@@ -18,118 +18,3 @@ open-graph:
   title: Deep-Learning-From-Scratch-Notes
   description: "Deep-Learning-From-Scratch-Notes: Table of Contents"
 ---
-
-<script id="academic-home-data" type="application/json">
-{
-  "kicker": "Modern Academic Notes",
-  "title": "Deep-Learning-From-Scratch-Notes",
-  "lead": "These notes connect mathematical derivations, minimal implementations, and PyTorch engineering practice in one reading path: clarify the formula, trace the diagram, then run the code.",
-  "labels": {
-    "all": "All",
-    "parts": "Parts",
-    "chapters": "Chapters",
-    "topics": "Topics",
-    "mapTitle": "Learning Map",
-    "filter": "Filter chapters",
-    "read": "Open chapter",
-    "derivationTitle": "Derivation Lens"
-  },
-  "parts": [
-    {
-      "id": "foundation",
-      "shortTitle": "Foundations",
-      "chapters": [
-        {
-          "title": "1.1 Neural Networks: A Learnable Function",
-          "summary": "View neural networks as function approximators, connecting parameters, layers, and nonlinear mappings.",
-          "href": "chapter01-introduction/chapter-1.1-neural-network.html",
-          "tags": ["function", "parameters", "nonlinearity"]
-        },
-        {
-          "title": "2.1 Automatic Differentiation in PyTorch",
-          "summary": "Understand backpropagation through computation graphs, tensors, gradients, and leaf nodes.",
-          "href": "chatper02-pytorch-introduction/chapter-2.1-automatic-differentiation.html",
-          "tags": ["autograd", "gradient", "graph"]
-        },
-        {
-          "title": "2.2 PyTorch Dimension Transformation Operations",
-          "summary": "Read reshape, view, permute, and related operations through tensor layout and shape semantics.",
-          "href": "chatper02-pytorch-introduction/chapter-2.2-dim-transform-appendix.html",
-          "tags": ["tensor", "shape", "layout"]
-        },
-        {
-          "title": "2.3 Gradient Recording and Control in PyTorch",
-          "summary": "Compare training, inference, and frozen-parameter contexts through their gradient behavior.",
-          "href": "chatper02-pytorch-introduction/chapter-2.3-auto-grad-contexts.html",
-          "tags": ["no_grad", "inference", "context"]
-        },
-        {
-          "title": "2.4 Dataset, DataLoader, and Batching",
-          "summary": "Move from dataset protocols to batching pipelines for reproducible data loading.",
-          "href": "chatper02-pytorch-introduction/chapter-2.4-dataset-and-dataloader.html",
-          "tags": ["data", "batch", "pipeline"]
-        },
-        {
-          "title": "2.5 nn.Module: Models, Parameters, and State",
-          "summary": "Understand module trees, parameter registration, buffers, and forward calls.",
-          "href": "chatper02-pytorch-introduction/chapter-2.5-nn-module.html",
-          "tags": ["module", "state", "parameter"]
-        },
-        {
-          "title": "2.6 Optimizer: From Manual Updates to State",
-          "summary": "Use optimizer state to reason about learning rates, momentum, and parameter groups.",
-          "href": "chatper02-pytorch-introduction/chapter-2.6-optimizer.html",
-          "tags": ["optimizer", "state", "lr"]
-        },
-        {
-          "title": "2.7 Training Loop",
-          "summary": "Connect forward passes, loss, backward passes, updates, and evaluation in one stable loop.",
-          "href": "chatper02-pytorch-introduction/chapter-2.7-training-loop.html",
-          "tags": ["training", "loss", "loop"]
-        },
-        {
-          "title": "2.8 Checkpoints and Resuming",
-          "summary": "Save models, optimizers, random states, and progress so experiments can resume and reproduce.",
-          "href": "chatper02-pytorch-introduction/chapter-2.8-checkpoints-resuming.html",
-          "tags": ["checkpoint", "resume", "reproducibility"]
-        }
-      ]
-    }
-  ],
-  "modes": [
-    {
-      "id": "formula",
-      "mark": "F",
-      "label": "Formula",
-      "title": "Start with the relation between objects",
-      "body": "Each topic first pins down notation, tensor shapes, and the objective so the formula becomes the interface for the implementation."
-    },
-    {
-      "id": "diagram",
-      "mark": "D",
-      "label": "Diagram",
-      "title": "Trace how data moves",
-      "body": "Layers, tensors, gradients, and state are treated as a flow that can be inspected step by step."
-    },
-    {
-      "id": "code",
-      "mark": "C",
-      "label": "Code",
-      "title": "End with a minimal runnable implementation",
-      "body": "Implementations stay short and readable: verify behavior first, then discuss engineering abstractions.",
-      "code": "loss.backward()\noptimizer.step()\noptimizer.zero_grad()"
-    }
-  ]
-}
-</script>
-
-<div id="academic-home-app" class="academic-home"></div>
-
-<noscript>
-<div class="academic-noscript">
-  <p>The learning map uses JavaScript; the static table of contents remains available below.</p>
-</div>
-</noscript>
-
-<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
-<script src="../assets/js/academic-home.js"></script>
