@@ -10,10 +10,10 @@ logo:
 
 color:
   palette:
-    atlas-blue: "#2f6f9f"
-    atlas-green: "#35a27f"
-    atlas-navy: "#18354f"
-    atlas-gold: "#f0c85a"
+    atlas-blue: "#1a4b8c"
+    atlas-navy: "#0f2748"
+    atlas-sky: "#d8e6f5"
+    compass-white: "#ffffff"
   primary: atlas-blue
-  secondary: atlas-green
+  secondary: atlas-navy
   link: atlas-blue
