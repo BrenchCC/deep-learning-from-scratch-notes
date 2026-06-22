@@ -1,0 +1,341 @@
+---
+author: Brench
+date: 2026-06-22
+date-modified: 2026-06-22
+open-graph:
+  title: chapter 3.1-from-linear-model-to-mlp
+  description: "3.1 From Linear Classifier to MLP: Why Hidden Layers Are Needed"
+title: "Chapter 3.1 From Linear Classifier to MLP: Why Hidden Layers Are Needed"
+order: 1
+---
+
+[![](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jshn9515/dnnl-notebooks/blob/main/en/ch3-multi-layer-perceptron/ch3.1-from-linear-model-to-mlp.ipynb){fig-align="left"}
+
+Previous chapters treated a neural network as a **learnable function**. Given an input $x$, the model runs a sequence of computations and produces an output $\hat{y}$; given the true label $y$, a loss function measures the gap between the prediction and the label. Training is the process of adjusting parameters so that this loss gradually decreases.
+
+This chapter starts with the classic **Multi-Layer Perceptron (MLP)** and walks through the basic training pipeline for a neural network. The focus is not to directly call PyTorch's `nn.Linear`, `nn.ReLU`, or `nn.CrossEntropyLoss`, but to first implement the forward and backward passes of these modules in NumPy.
+
+The goal is specific:
+
+> **First understand the numerical computation and gradient flow inside each layer, then return to PyTorch and see which parts the framework automates.**
+
+This section starts from a concrete task: classifying MNIST handwritten digit images. We first formulate image classification as a linear classifier, then analyze the limitations of linear models, and finally introduce hidden layers and activation functions in MLPs.
+
+```{python}
+import numpy as np
+
+rng = np.random.default_rng(seed=42)
+print('NumPy version:', np.__version__)
+```
+
+## 3.1.1 The MNIST Classification Problem
+
+MNIST is a handwritten digit classification dataset. Each image is a grayscale image of size $28 \times 28$, with a digit label:
+
+$$
+y \in \{0, 1, 2, \dots, 9\}
+$$
+
+This is a 10-class classification problem. After seeing a handwritten digit image, the model needs to decide which class it belongs to.
+
+![Figure 3.1.1: MNIST handwritten digit classification dataset [@enwiki:MNIST]](figures/chapter-3.1-mnist-samples.png)
+
+For a computer, a $28 \times 28$ grayscale image can be viewed as a matrix:
+
+$$
+X_{\text{image}} \in \mathbb{R}^{28 \times 28}
+$$
+
+Each entry in the matrix represents a pixel intensity.
+
+The most basic MLP is built from fully connected layers. A fully connected layer usually accepts a one-dimensional feature vector, not a two-dimensional image matrix directly. This is similar to the support vector machine (SVM) classifiers used in traditional machine learning. Therefore, before feeding an image into the simplest fully connected model, we usually flatten the two-dimensional image into a one-dimensional vector:
+
+$$
+x \in \mathbb{R}^{28 \times 28} \rightarrow x \in \mathbb{R}^{784}
+$$
+
+If a batch contains $B$ images, the input can be written as:
+
+$$
+X \in \mathbb{R}^{B \times 784}
+$$
+
+Each row is the flattened vector of one image.
+
+This step discards the original two-dimensional spatial structure of the image. For example, after flattening, the model does not directly know which pixels are above, below, left, or right of a given pixel. When we discuss CNNs and ViTs later, we will revisit how to use image structure more directly; in an MLP, we first treat the image as an ordinary vector.
+
+```{python}
+batch_size = 4
+image_height = 28
+image_width = 28
+
+images = rng.random((batch_size, image_height, image_width))
+x = images.reshape(batch_size, -1)
+
+print('x.shape:', x.shape)
+```
+
+The output shape is `(4, 784)`. Each image has been converted from a $28 \times 28$ matrix into a 784-dimensional vector.
+
+## 3.1.2 The Simplest Classifier: A Linear Model
+
+Once we have the input vector, the most direct idea is to use a linear model that maps the 784-dimensional input directly to 10 class scores:
+
+$$
+Z = XW + b
+$$
+
+where:
+
+$$
+\begin{aligned}
+X &\in \mathbb{R}^{B \times 784} \\
+W &\in \mathbb{R}^{784 \times 10} \\
+b &\in \mathbb{R}^{10} \\
+Z &\in \mathbb{R}^{B \times 10}
+\end{aligned}
+$$
+
+The matrix $Z$ is usually called **logits**, the model's unnormalized scores for each class. For each image, the model outputs 10 numbers, one score for each class. A higher score means the model is more inclined to assign the image to that class.
+
+For example, for one image, the model outputs:
+
+$$
+z = [z_0, z_1, z_2, \dots, z_9]
+$$
+
+If $z_7$ is the largest value, we can record the model prediction as digit 7:
+
+$$
+\hat{y} = \arg\max_j z_j
+$$
+
+It is important to note that logits are not probabilities. They are only unnormalized class scores. Later, we will use softmax to convert logits into probabilities, and then use cross entropy to measure the gap between the prediction and the true label.
+
+Now implement the forward pass of this linear classifier in NumPy:
+
+```{python}
+input_dim = 784
+num_classes = 10
+
+W = rng.random((input_dim, num_classes))
+b = np.zeros(num_classes)
+logits = x @ W + b
+
+print('logits.shape:', logits.shape)
+```
+
+The output shape is `(4, 10)`. For the 4 images in the batch, the model outputs 10 class scores for each image.
+
+## 3.1.3 What Does a Linear Classifier Learn?
+
+A linear classifier has a simple form:
+
+$$
+Z = XW + b
+$$
+
+![Figure 3.1.3: Linear classifier model [@zhang2023d2l, fig. 3.1.2]](figures/chapter-3.1-single-neuron.svg)
+
+Here, $X$ is the feature matrix of the input images, $W$ is the weight matrix, and $b$ is the bias vector. In the figure above, the input layer corresponds to $X$, the output layer corresponds to $Z$, and the connections correspond to the weight matrix $W$. Each output node also has a bias term $b$, which is not drawn separately in the figure.
+
+If we look at one class $j$, its logit is:
+
+$$
+z_j = x^\top w_j + b_j
+$$
+
+where $w_j$ is the $j$-th column of $W$. Each class has its own weight vector $w_j$. The model takes the inner product between the input image $x$ and this weight vector, then adds the bias $b_j$, producing the score for class $j$. Intuitively, $w_j$ can be understood as a template for class $j$: if the input image matches this template better, the inner product becomes larger, and the score for that class becomes higher. Training repeatedly adjusts the $W$ and $b$ associated with different digits so that they become better templates for MNIST classification.
+
+This model has limited expressive power. It can only apply one linear transformation to the input. For a relatively simple dataset such as MNIST, a linear classifier can still learn useful patterns; but if the image variation becomes more complex, for example when digits are shifted, rotated, or written with different stroke widths, a purely linear model has difficulty handling these factors reliably.
+
+A linear classifier can only learn decision boundaries of the following form:
+
+$$
+x^\top w + b = 0
+$$
+
+This corresponds to a line in two-dimensional space, a plane in three-dimensional space, or a hyperplane in high-dimensional space. It works for linearly separable data, but it cannot express more complex nonlinear relations. Linear SVMs in traditional machine learning have a similar limitation: their decision boundaries are still linear.
+
+A natural question follows: if one linear layer is not enough, can we simply stack more linear layers?
+
+## 3.1.4 Does Stacking Linear Layers Help?
+
+Suppose we connect two linear layers:
+
+$$
+\begin{aligned}
+H &= XW_1 + b_1 \\
+Z &= HW_2 + b_2
+\end{aligned}
+$$
+
+Substitute the first line into the second:
+
+$$
+Z = (XW_1 + b_1)W_2 + b_2
+$$
+
+Expand it:
+
+$$
+Z = X(W_1W_2) + b_1W_2 + b_2
+$$
+
+Define:
+
+$$
+\begin{aligned}
+W' &= W_1W_2 \\
+b' &= b_1W_2 + b_2
+\end{aligned}
+$$
+
+Then the whole model becomes:
+
+$$
+Z = XW' + b'
+$$
+
+This is still a linear model. As long as there is no nonlinear operation in between, multiple stacked linear layers are ultimately equivalent to a single linear layer. The number of layers increases, but the expressive power does not fundamentally change.
+
+Therefore, a neural network cannot be built by stacking linear layers alone. A nonlinear function must be inserted between layers so that the model does not collapse into one large linear transformation. This nonlinear function is the **activation function**.
+
+## 3.1.5 Adding Hidden Layers and Activation Functions
+
+The term activation function comes from biology. A biological neuron receives multiple input signals, takes a weighted sum of them, and if the stimulus is strong enough, the neuron is activated and passes a signal to the next neuron. In an artificial neural network, the activation function corresponds to this "activation" process. It is a nonlinear function that applies a nonlinear transformation to an intermediate representation. As long as a function satisfies basic conditions such as nonlinearity and differentiability, or differentiability almost everywhere, it can usually be used as an activation function.
+
+Now insert an activation function $\phi$ between two linear layers:
+
+$$
+\begin{aligned}
+H &= XW_1 + b_1 \\
+A &= \phi(H) \\
+Z &= AW_2 + b_2
+\end{aligned}
+$$
+
+Here, $H$ is the hidden layer pre-activation, the value before entering the activation function; $A$ is the hidden representation after the activation function. $\phi$ is a nonlinear function. Functions such as sin and cos also satisfy the nonlinearity requirement, although in practice ReLU and its variants are used more often.
+
+After adding $\phi$, the model is no longer equivalent to a single linear layer. The nonlinear transformation changes the intermediate representation, allowing the model to compose more complex functions.
+
+For MNIST, we can write:
+
+$$
+\begin{aligned}
+X &\in \mathbb{R}^{B \times 784} \\
+W_1 &\in \mathbb{R}^{784 \times H} \\
+b_1 &\in \mathbb{R}^{H} \\
+A &\in \mathbb{R}^{B \times H} \\
+W_2 &\in \mathbb{R}^{H \times 10} \\
+b_2 &\in \mathbb{R}^{10} \\
+Z &\in \mathbb{R}^{B \times 10}
+\end{aligned}
+$$
+
+Here, $H$ is the hidden dimension. For example, setting $H=256$ means that each image is first mapped to a 256-dimensional hidden representation, and that representation is then used to predict 10 classes. This structure lets the model extract hidden features useful for classification before producing class scores. $H$ is a hyperparameter and can be adjusted according to dataset complexity and the desired expressive power.
+
+In NumPy:
+
+```{python}
+hidden_dim = 256
+
+W1 = rng.random((input_dim, hidden_dim))
+b1 = np.zeros(hidden_dim)
+W2 = rng.random((hidden_dim, num_classes))
+b2 = np.zeros(num_classes)
+
+h = x @ W1 + b1
+a = np.maximum(0, h)  # activation function: ReLU
+logits = a @ W2 + b2
+
+print('h.shape:', h.shape)
+print('a.shape:', a.shape)
+print('logits.shape:', logits.shape)
+```
+
+The activation function used here is ReLU:
+
+$$
+\operatorname{ReLU}(x) = \max(0, x)
+$$
+
+ReLU maps negative values to 0 and keeps positive values unchanged. This operation is simple, but it provides the key nonlinearity that prevents the combination of two linear transformations from being compressed into one linear transformation. ReLU is also one of the most widely used activation functions in modern neural networks.
+
+## 3.1.6 Basic Structure of an MLP
+
+The model we now have is the simplest form of an MLP:
+
+$$
+X
+\rightarrow
+\operatorname{Linear}_1
+\rightarrow
+H_1
+\rightarrow
+\operatorname{ReLU}
+\rightarrow
+H_2
+\rightarrow
+\operatorname{Linear}_2
+\rightarrow
+Z
+$$
+
+![Figure 3.1.6: MLP model [@zhang2023d2l, fig. 4.1.1]](figures/chapter-3.1-mlp.svg)
+
+Here, $\operatorname{Linear}_1$ denotes the first linear layer, $\operatorname{ReLU}$ is the activation function, and $\operatorname{Linear}_2$ denotes the second linear layer. $H_1$ and $H_2$ correspond to the hidden layer pre-activation and post-activation representations, respectively, and $Z$ is the output logits.
+
+It can also be written as a function:
+
+$$
+f(X) = \operatorname{ReLU}(XW_1 + b_1)W_2 + b_2
+$$
+
+Two details matter here.
+
+First, each layer in an MLP usually applies a linear transformation to the last dimension. For MNIST, each image has been flattened into a 784-dimensional vector, so the first layer maps 784 dimensions to the hidden dimension $H$.
+
+Second, the current output $Z$ is logits, not probabilities. Later, softmax will convert logits into probabilities, and cross entropy will compute the classification loss. Their forward and backward passes will be developed separately.
+
+Therefore, the MLP classification pipeline can be summarized as:
+
+$$
+\text{image}
+\rightarrow
+\text{flatten}
+\rightarrow
+\text{hidden representation}
+\rightarrow
+\text{logits}
+\rightarrow
+\text{loss}
+$$
+
+The rest of this chapter will unpack each part of this pipeline:
+
+- How do we write the forward and backward passes of activation functions?
+- How do softmax and cross entropy turn logits into a classification loss?
+- How do we derive parameter gradients for a linear layer?
+- After multiple modules are connected, how does the gradient propagate backward layer by layer?
+- How do we train this model end to end on MNIST using NumPy?
+
+## 3.1.7 Summary
+
+This section started from the MNIST classification problem and introduced the basic path from a linear classifier to an MLP.
+
+Each MNIST image can be flattened from a $28 \times 28$ matrix into a 784-dimensional vector. The simplest classifier maps the input directly to 10 class logits with one linear transformation:
+
+$$
+Z = XW + b
+$$
+
+A linear classifier has limited expressive power. If we only stack multiple linear layers without inserting nonlinear operations between them, the whole model is still equivalent to a single linear layer. Therefore, an MLP inserts activation functions between linear layers:
+
+$$
+Z = \phi(XW_1 + b_1)W_2 + b_2
+$$
+
+Activation functions allow the model to represent more complex nonlinear relations and are an important source of neural network expressive power.
+
+The next section focuses on common activation functions. We will examine not only their forward forms, but also how they send gradients upstream during backpropagation.

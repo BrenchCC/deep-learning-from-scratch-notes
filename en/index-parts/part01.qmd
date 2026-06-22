@@ -10,6 +10,7 @@ listing:
   contents:
     - "../chapter01-introduction/*.qmd"
     - "../chatper02-pytorch-introduction/*.qmd"
+    - "../chapter03-multi-layer-perception/*.qmd"
   sort: title asc
   type: table
   fields: [title, author, date]
