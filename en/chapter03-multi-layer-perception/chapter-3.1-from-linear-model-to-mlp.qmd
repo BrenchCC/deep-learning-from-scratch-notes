@@ -9,8 +9,6 @@ title: "Chapter 3.1 From Linear Classifier to MLP: Why Hidden Layers Are Needed"
 order: 1
 ---
 
-[![](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jshn9515/dnnl-notebooks/blob/main/en/ch3-multi-layer-perceptron/ch3.1-from-linear-model-to-mlp.ipynb){fig-align="left"}
-
 Previous chapters treated a neural network as a **learnable function**. Given an input $x$, the model runs a sequence of computations and produces an output $\hat{y}$; given the true label $y$, a loss function measures the gap between the prediction and the label. Training is the process of adjusting parameters so that this loss gradually decreases.
 
 This chapter starts with the classic **Multi-Layer Perceptron (MLP)** and walks through the basic training pipeline for a neural network. The focus is not to directly call PyTorch's `nn.Linear`, `nn.ReLU`, or `nn.CrossEntropyLoss`, but to first implement the forward and backward passes of these modules in NumPy.
