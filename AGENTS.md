@@ -13,14 +13,24 @@ This repository combines a Quarto documentation website with a small Python deep
 
 ## Build, Test, and Development Commands
 
+### Required Local Execution Environment
+
+This repository must use the `cs_hw` Conda environment for all local Python-backed execution. This rule takes priority over generic Python or Quarto command examples whenever a command may start Python, Jupyter, pytest, Ruff, package builds, or notebook execution.
+
+- Python commands: `conda run -n cs_hw python ...`
+- Package installs: `conda run -n cs_hw python -m pip install ...`
+- Pytest: `conda run -n cs_hw pytest ...`
+- Ruff: `conda run -n cs_hw ruff check .` and `conda run -n cs_hw ruff format .`
+- Quarto renders that may touch Jupyter/Python: `conda run -n cs_hw quarto render ...`
+
+README and user-facing documentation examples should stay environment-agnostic unless explicitly documenting local agent execution.
+
 - `quarto render`: render the full documentation website into `_site/`.
 - `quarto preview`: run a local preview server for editing `.qmd` pages.
 - `quarto convert path/to/file.qmd`: convert a Quarto page when notebook inspection is useful.
 - `cd deep_learning && python -m pip install -e ".[test]"`: install the package and test extras for local development.
 - `cd deep_learning && pytest`: run the Python test suite.
 - `ruff check .` and `ruff format .`: lint and format Python files according to repository Ruff settings.
-
-Use the `cs_hw` Conda environment for local Python execution when running project scripts or tests through an activated environment.
 
 ## Coding Style & Naming Conventions
 

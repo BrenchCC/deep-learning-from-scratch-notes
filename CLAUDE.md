@@ -11,28 +11,36 @@ This repository combines two coupled artifacts:
 
 `AGENTS.md` is the authoritative contributor guide — read it for project conventions. This file supplements, not duplicates, it.
 
+## High-Priority Local Execution Rule
+
+This repository's local execution environment is `cs_hw`. For Claude Code, run every command that may invoke Python, Jupyter, pytest, Ruff, package builds, or notebook execution through Conda:
+
+```bash
+conda run -n cs_hw <command>
+```
+
+This rule overrides generic examples such as `python ...`, `pytest`, `ruff ...`, and Python-backed `quarto render ...` when executing commands locally. Keep README snippets environment-agnostic unless the user explicitly asks for Conda-specific documentation.
+
 ## Common Commands
 
 ### Quarto website (documentation)
 
 ```bash
-quarto render                 # render full site to _site/ (CI runs with --no-execute)
+conda run -n cs_hw quarto render  # render full site to _site/ (CI runs with --no-execute)
 quarto preview                # local preview server while editing .qmd
-quarto convert path/to/file.qmd  # inspect as notebook when needed
+conda run -n cs_hw quarto convert path/to/file.qmd  # inspect as notebook when needed
 ```
 
 Per `_quarto.yml`: `execute.eval: false` — code blocks in `.qmd` are NOT executed during render by default. Do not expect outputs to be regenerated locally; treat existing rendered content as authoritative unless explicitly re-running.
 
 ### Python package (`deep_learning/`)
 
-Conda environment for this project: `cs_hw`. Run all Python commands through it, e.g. `conda run -n cs_hw python ...`.
-
 ```bash
 cd deep_learning
-python -m pip install -e ".[test]"          # editable install with pytest
-python -m pytest deep_learning/tests         # run full test suite
-python -m pytest deep_learning/tests/test_nn_attention.py::test_name  # single test
-python -m build --outdir dist ./deep_learning  # build sdist+wheel (CI step)
+conda run -n cs_hw python -m pip install -e ".[test]"  # editable install with pytest
+conda run -n cs_hw python -m pytest deep_learning/tests  # run full test suite
+conda run -n cs_hw python -m pytest deep_learning/tests/test_nn_attention.py::test_name  # single test
+conda run -n cs_hw python -m build --outdir dist ./deep_learning  # build sdist+wheel (CI step)
 ```
 
 `deep_learning/deep_learning/tests/conftest.py` inserts the package root on `sys.path`, so tests run without installation — but the editable install is still recommended for dev.
@@ -40,8 +48,8 @@ python -m build --outdir dist ./deep_learning  # build sdist+wheel (CI step)
 ### Lint & format (Ruff)
 
 ```bash
-ruff check .      # lint
-ruff format .     # format
+conda run -n cs_hw ruff check .      # lint
+conda run -n cs_hw ruff format .     # format
 ```
 
 CI runs `ruff format --check --diff` scoped to `deep_learning/deep_learning` and `deep_learning/deep_learning/tests` (see `.github/workflows/deep-learning-ci.yml`). Code must already be ruff-formatted or CI fails.
