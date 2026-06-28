@@ -1,0 +1,532 @@
+---
+author: Brench
+date: 2026-06-28
+date-modified: 2026-06-29
+open-graph:
+  title: chapter 3.4-linear-layer
+  description: "3.4 Forward and Backward of Linear Layer"
+title: "Chapter 3.4 线性层的前向传播与反向传播"
+order: 4
+---
+
+[![](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jshn9515/dnnl-notebooks/blob/main/zh/ch3-multi-layer-perceptron/ch3.4-linear-layer.ipynb){fig-align="left"}
+
+前面几节分别讨论了 MLP 的基本组件：
+
+1. 线性变换负责把输入映射到新的特征空间；
+2. 激活函数负责引入非线性；
+3. Softmax cross entropy 负责把最后的 logits 转成损失，并给出反向传播的起点。
+
+本节讨论 MLP 中反复出现的模块：**线性层（linear layer）**。先从 MLP 的整体结构确定线性层的位置。实际模型通常在隐藏层后接激活函数，此处暂不考虑这部分计算。
+
+![图 3.4.0：MLP 模型 [@zhang2023d2l, fig. 4.1.1]](figures/chapter-3.1-mlp.svg)
+
+MLP 中相邻两层通常采用全连接结构。每条边对应一个可学习权重，从一层到下一层的整体计算可以写成线性变换。
+
+对于一个两层 MLP，线性层出现了两次：
+
+$$
+\begin{aligned}
+H &= XW_1 + b_1 \\
+Y &= HW_2 + b_2
+\end{aligned}
+$$
+
+虽然它们的输入输出维度不同，但本质上做的是同一件事：
+
+$$
+Y = XW + b
+$$
+
+下面推导线性层的前向传播和反向传播，并用 NumPy 实现可复用的 `Linear` 类。后续实现完整 MLP 时将直接使用该模块。
+
+```{python}
+import math
+from collections.abc import Iterable, Iterator
+from typing import Any, override
+
+import numpy as np
+import numpy.typing as npt
+from dnnlpy.models.mlp import Module, Optimizer
+
+rng = np.random.default_rng(42)
+print('NumPy version:', np.__version__)
+```
+
+## 3.4.1 线性层的前向传播
+
+假设一个 batch 中有 $B$ 个样本，每个样本的输入维度是 $D_{\text{in}}$。那么输入可以写成：
+
+$$
+X \in \mathbb{R}^{B \times D_{\text{in}}}
+$$
+
+线性层有两个可学习参数，权重 $W$ 和偏置 $b$：
+
+$$
+\begin{aligned}
+W &\in \mathbb{R}^{D_{\text{in}} \times D_{\text{out}}} \\
+b &\in \mathbb{R}^{D_{\text{out}}}
+\end{aligned}
+$$
+
+前向传播为：
+
+$$
+Y = XW + b
+$$
+
+输出的形状是：
+
+$$
+Y \in \mathbb{R}^{B \times D_{\text{out}}}
+$$
+
+这里的偏置 $b$ 会被广播到 batch 维度上。也就是说，对于每个样本，都会加上同一个偏置向量：
+
+$$
+Y_i = X_i W + b
+$$
+
+用 NumPy 写出来就是：
+
+```{python}
+B = 4
+D_in = 3
+D_out = 2
+
+X = rng.random((B, D_in))
+W = rng.random((D_in, D_out))
+b = np.zeros(D_out)
+
+Y = X @ W + b
+
+print('X.shape:', X.shape)
+print('W.shape:', W.shape)
+print('b.shape:', b.shape)
+print('Y.shape:', Y.shape)
+```
+
+从形状上看：
+
+$$
+(B, D_{\text{in}}) @ (D_{\text{in}}, D_{\text{out}}) = (B, D_{\text{out}})
+$$
+
+因此，线性层将每个样本从 $D_{\text{in}}$ 维空间映射到 $D_{\text{out}}$ 维空间。
+
+## 3.4.2 线性层的反向传播
+
+训练神经网络时，前向传播得到损失 $L$，反向传播计算损失对输入和参数的梯度。
+
+对于线性层：
+
+$$
+Y = XW + b
+$$
+
+反向传播时，我们会从后一层得到上游梯度：
+
+$$
+G = \frac{\partial L}{\partial Y}
+$$
+
+它的形状和 $Y$ 一样：
+
+$$
+G \in \mathbb{R}^{B \times D_{\text{out}}}
+$$
+
+线性层根据该上游梯度计算以下三个量：
+
+1. 损失对输入的梯度：$\frac{\partial L}{\partial X}$，用于继续传给前一层；
+2. 损失对权重的梯度：$\frac{\partial L}{\partial W}$，用于更新 $W$；
+3. 损失对偏置的梯度：$\frac{\partial L}{\partial b}$，用于更新 $b$。
+
+因此，线性层的 backward 接收 $G$，返回 $\frac{\partial L}{\partial X}$，同时保存 $\frac{\partial L}{\partial W}$ 和 $\frac{\partial L}{\partial b}$。
+
+### 3.4.2.1 对输入的梯度
+
+先看输入 $X$ 的梯度。对于一个 batch，线性层可以写成：
+
+$$
+Y = XW + b
+$$
+
+其中：
+
+$$
+\begin{aligned}
+X &\in \mathbb{R}^{B \times D_{\text{in}}} \\
+W &\in \mathbb{R}^{D_{\text{in}} \times D_{\text{out}}} \\
+b &\in \mathbb{R}^{D_{\text{out}}} \\
+Y &\in \mathbb{R}^{B \times D_{\text{out}}}
+\end{aligned}
+$$
+
+输出的第 $i$ 个样本、第 $j$ 个分量可以写成：
+
+$$
+Y_{i,j} = \sum_{k=1}^{D_{\text{in}}} X_{i,k} W_{k,j} + b_j
+$$
+
+固定一个输入分量 $X_{i,k}$，它会出现在同一个样本的每个输出 $Y_{i,j}$ 的公式里：
+
+$$
+\begin{aligned}
+Y_{i,1} &= \cdots + X_{i,k} W_{k,1} + \cdots \\
+Y_{i,2} &= \cdots + X_{i,k} W_{k,2} + \cdots \\
+&\vdots \\
+Y_{i,D_{\text{out}}} &= \cdots + X_{i,k} W_{k,D_{\text{out}}} + \cdots
+\end{aligned}
+$$
+
+因此，如果我们想知道输入的第 $i$ 个样本、第 $k$ 个分量 $X_{i,k}$ 对损失的影响，就需要把该样本所有输出维度上的影响加起来：
+
+$$
+\frac{\partial L}{\partial X_{i,k}} =
+\sum_{j=1}^{D_{\text{out}}}\frac{\partial L}{\partial Y_{i,j}}
+\frac{\partial Y_{i,j}}{\partial X_{i,k}} =
+\sum_{j=1}^{D_{\text{out}}} G_{i,j} W_{k,j}
+$$
+
+由于：
+
+$$
+\frac{\partial Y_{i,j}}{\partial X_{i,k}} = W_{k,j}
+$$
+
+所以：
+
+$$
+\frac{\partial L}{\partial X_{i,k}} =
+\sum_{j=1}^{D_{\text{out}}} G_{i,j} W_{k,j}
+$$
+
+写成矩阵形式就是：
+
+$$
+\frac{\partial L}{\partial X} = G W^\top
+$$
+
+形状也正好对应：
+
+$$
+(B, D_{\text{out}}) @ (D_{\text{out}}, D_{\text{in}}) = (B, D_{\text{in}})
+$$
+
+这说明，输入梯度的形状会和输入 $X$ 保持一致。
+
+### 3.4.2.2 对权重的梯度
+
+接着看权重 $W$ 的梯度。对于一个 batch，线性层可以写成：
+
+$$
+Y = XW + b
+$$
+
+输出的第 $i$ 个样本、第 $j$ 个分量为：
+
+$$
+Y_{i,j} = \sum_{k=1}^{D_{\text{in}}} X_{i,k} W_{k,j} + b_j
+$$
+
+固定权重 $W_{k,j}$，它会出现在每个样本的第 $j$ 个输出里：
+
+$$
+\begin{aligned}
+Y_{1,j} &= \cdots + X_{1,k} W_{k,j} + \cdots \\
+Y_{2,j} &= \cdots + X_{2,k} W_{k,j} + \cdots \\
+&\vdots \\
+Y_{B,j} &= \cdots + X_{B,k} W_{k,j} + \cdots
+\end{aligned}
+$$
+
+因此，如果我们想知道权重 $W_{k,j}$ 对损失的影响，就需要把 batch 中所有样本的影响加起来：
+
+$$
+\frac{\partial L}{\partial W_{k,j}} =
+\sum_{i=1}^{B}
+\frac{\partial L}{\partial Y_{i,j}}
+\frac{\partial Y_{i,j}}{\partial W_{k,j}}
+$$
+
+由于：
+
+$$
+\frac{\partial Y_{i,j}}{\partial W_{k,j}} = X_{i,k}
+$$
+
+所以：
+
+$$
+\frac{\partial L}{\partial W_{k,j}} =
+\sum_{i=1}^{B} G_{i,j} X_{i,k}
+$$
+
+调整乘积的书写顺序：
+
+$$
+\frac{\partial L}{\partial W_{k,j}} =
+\sum_{i=1}^{B} X_{i,k} G_{i,j}
+$$
+
+这正好对应矩阵乘法：
+
+$$
+\frac{\partial L}{\partial W} = X^\top G
+$$
+
+形状为：
+
+$$
+(D_{\text{in}}, B) @ (B, D_{\text{out}}) = (D_{\text{in}}, D_{\text{out}})
+$$
+
+因此，$\frac{\partial L}{\partial W}$ 与 $W$ 的形状相同。参数梯度必须与参数本身形状一致，才能逐元素更新参数。
+
+### 3.4.2.3 对偏置的梯度
+
+最后看偏置 $b$。前向传播中，偏置会加到每个样本的输出上：
+
+$$
+Y_i = X_i W + b
+$$
+
+对于第 $j$ 个偏置 $b_j$，它会影响 batch 中所有样本的第 $j$ 个输出。因此：
+
+$$
+\frac{\partial L}{\partial b_j} =
+\sum_{i=1}^{B} \frac{\partial L}{\partial Y_{i,j}}
+$$
+
+写成向量形式就是：
+
+$$
+\frac{\partial L}{\partial b} = \sum_{i=1}^{B} G_i
+$$
+
+形状为 $(D_{\text{out}})$，和偏置 $b$ 的形状一致。
+
+### 3.4.2.4 线性层反向传播总结
+
+对于线性层：
+
+$$
+Y = XW + b
+$$
+
+假设上游梯度为：
+
+$$
+G = \frac{\partial L}{\partial Y}
+$$
+
+那么反向传播为：
+
+$$
+\begin{aligned}
+\frac{\partial L}{\partial X} &= G W^\top \\
+\frac{\partial L}{\partial W} &= X^\top G \\
+\frac{\partial L}{\partial b} &= \sum_{i=1}^{B} G_i
+\end{aligned}
+$$
+
+用 NumPy 写出来就是：
+
+```{python}
+G = rng.random((B, D_out))
+
+dX = G @ W.T
+dW = X.T @ G
+db = np.sum(G, axis=0)
+
+print('dX.shape:', dX.shape)
+print('dW.shape:', dW.shape)
+print('db.shape:', db.shape)
+```
+
+矩阵转置和求和维度是实现反向传播时最常见的错误来源。实现线性层时，可以逐步核对输入、参数与梯度的形状。
+
+## 3.4.3 用 NumPy 实现 Linear 层
+
+在实现 Linear 层之前，我们先定义一个 `Parameter` 类来封装可学习的参数。
+
+该类继承 NumPy 的 `ndarray`，并增加 `.grad` 属性保存梯度。其功能类似于 PyTorch 的 `nn.Parameter`，但不包含 Autograd。后续只需将它视为带梯度属性的 NumPy 数组。
+
+```{python}
+class Parameter(np.ndarray):
+    __array_priority__ = 1000
+
+    grad: np.ndarray | None
+
+    def __new__(cls, data: Any, dtype: npt.DTypeLike = np.float32):
+        obj = np.asarray(data, dtype=dtype).view(cls)
+        obj.grad = None
+        return obj
+
+    def __array_finalize__(self, obj: Any):
+        if obj is None:
+            return
+        self.grad = getattr(obj, 'grad', None)
+
+    def __array_wrap__(self, out_arr: Any, context=None, return_scalar=False):
+        return np.asarray(out_arr)
+
+    @property
+    def data(self) -> np.ndarray:
+        return np.asarray(self)
+```
+
+接下来将线性层封装为一个类。该类需要完成以下工作：
+
+1. 初始化参数 $W$ 和 $b$；
+2. 在 `forward` 中计算 $XW + b$；
+3. 保存输入 $X$，因为 backward 时需要用到它；
+4. 在 `backward` 中计算 `dx`、`dW` 和 `db`。
+
+```{python}
+class Linear(Module):
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        W = rng.standard_normal((in_features, out_features))
+        W = W * math.sqrt(2.0 / in_features)
+        b = np.zeros(out_features)
+
+        self.W = Parameter(W)
+        self.b = Parameter(b)
+
+    @override
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        self.ctx = x  # save input for backward
+        return x @ self.W + self.b
+
+    @override
+    def backward(self, grad: np.ndarray) -> np.ndarray:
+        assert self.ctx is not None, 'Must call forward before backward.'
+        x = self.ctx  # recover saved input
+
+        self.W.grad = x.T @ grad  # dW
+        self.b.grad = np.sum(grad, axis=0)  # db
+        return grad @ self.W.T  # dx
+
+    @override
+    def parameters(self) -> Iterator[Parameter]:
+        for value in self.__dict__.values():
+            if isinstance(value, Parameter):
+                yield value
+            elif isinstance(value, Module):
+                yield from value.parameters()
+```
+
+其中，`grad` 就是上游梯度，也就是前面推导中的 $G$。
+
+初始化权重 $W$ 时采用 He initialization：
+
+$$
+W \sim \mathcal{N}\left(0, \frac{2}{D_{\text{in}}}\right)
+$$
+
+He initialization 通常与 ReLU 搭配，用于控制信号跨层传播时的尺度。此处不展开初始化理论，只将它作为比标准正态分布更合适的默认选择。
+
+下面检查前向输出与各梯度的形状：
+
+```{python}
+linear = Linear(in_features=3, out_features=2)
+x = rng.random((4, 3))
+out = linear(x)
+
+dout = rng.random(out.shape)
+dx = linear.backward(dout)
+
+print('out.shape:', out.shape)
+print('dx.shape:', dx.shape)
+print('dW.shape:', linear.W.grad.shape)
+print('db.shape:', linear.b.grad.shape)
+```
+
+至此，`Linear` 层具备神经网络模块所需的基本接口：前向传播接收输入，反向传播接收上游梯度，并将输入梯度传给前一层。
+
+## 3.4.4 参数更新
+
+线性层的 backward 只负责计算梯度，并不直接更新参数。参数更新通常由优化器完成。最简单的优化器是 SGD：
+
+$$
+\begin{aligned}
+W &\leftarrow W - \eta \frac{\partial L}{\partial W} \\
+b &\leftarrow b - \eta \frac{\partial L}{\partial b}
+\end{aligned}
+$$
+
+其中，$\eta$ 是学习率。
+
+用 NumPy 写就是：
+
+```{python}
+class SGD(Optimizer):
+    def __init__(self, params: Iterable[Parameter], lr: float = 0.1):
+        super().__init__(params)
+        self.lr = lr
+
+    @override
+    def step(self):
+        for p in self.params:
+            if p.grad is None:
+                continue
+
+            p -= self.lr * p.grad
+```
+
+下面执行一次参数更新：
+
+```{python}
+optimizer = SGD(linear.parameters(), lr=0.1)
+
+print('Original W:\n', linear.W)
+print('Original b:', linear.b)
+
+print('\n', end='')
+optimizer.step()
+
+print('Updated W:\n', linear.W)
+print('Updated b:', linear.b)
+```
+
+其中，`parameters()` 方法会返回该层的所有可学习参数（用 `Parameter` 封装），也就是权重 `W` 和偏置 `b`。如果某个模块中还包含子模块，那么 `parameters()` 会递归地返回这些子模块中的参数。
+
+这里采用的职责划分是：forward 计算输出，backward 计算梯度，优化器根据梯度更新参数。
+
+这三个步骤虽然在训练循环里连续发生，但概念上应该分开理解。
+
+## 3.4.5 本章小结
+
+本节推导并实现了线性层的前向传播和反向传播。
+
+线性层的前向传播是：
+
+$$
+Y = XW + b
+$$
+
+给定上游梯度：
+
+$$
+G = \frac{\partial L}{\partial Y}
+$$
+
+线性层的反向传播为：
+
+$$
+\begin{aligned}
+\frac{\partial L}{\partial X} &= G W^\top \\
+\frac{\partial L}{\partial W} &= X^\top G \\
+\frac{\partial L}{\partial b} &= \sum_{i=1}^{B} G_i
+\end{aligned}
+$$
+
+实现时，线性层需要在 forward 中保存输入，因为 backward 计算 $\frac{\partial L}{\partial W}$ 时需要 $X$。更一般地，每一层都要在 forward 中保留反向计算所需的信息，再在 backward 中结合这些信息与上游梯度计算本层梯度。
+
+至此，MLP 所需的线性层、激活函数和 softmax cross entropy 已经齐备。下一节将组合这些模块，用 NumPy 搭建完整的 MLP。
