@@ -1,0 +1,602 @@
+---
+author: Brench
+date: 2026-06-30
+date-modified: 2026-06-30
+open-graph:
+  title: chapter 3.5-mlp-from-scratch
+  description: "3.5 Building a Complete MLP with NumPy and PyTorch"
+title: "Chapter 3.5 Building a Complete MLP with NumPy and PyTorch"
+order: 5
+---
+
+The preceding sections implemented the basic components required by an MLP:
+
+1. a `Linear` layer performs a learnable linear transformation;
+2. an activation function introduces nonlinearity;
+3. `CrossEntropyLoss` converts logits into a loss and provides the starting point for backpropagation.
+
+Connecting these components produces a complete multilayer perceptron. This section addresses one question:
+
+> **How are the forward and backward passes of an MLP connected?**
+
+We first implement a two-layer MLP in NumPy, including its forward pass, backward pass, and parameter update. We then implement the same architecture in PyTorch and compare the corresponding computations.
+
+$$
+X
+\rightarrow
+\operatorname{Linear}_1
+\rightarrow
+\operatorname{ReLU}
+\rightarrow
+\operatorname{Linear}_2
+\rightarrow
+\operatorname{CrossEntropyLoss}
+\rightarrow
+L
+$$
+
+Equivalently,
+
+$$
+\begin{aligned}
+H &= XW_1 + b_1 \\
+A &= \operatorname{ReLU}(H) \\
+Z &= AW_2 + b_2 \\
+L &= \operatorname{CrossEntropyLoss}(Z, y).
+\end{aligned}
+$$
+
+Here, $X$ is the input, $y$ contains the labels, $H$ is the hidden-layer output, $A$ is the hidden representation after ReLU, $Z$ contains the final logits, and $L$ is the classification loss.
+
+```{python}
+import os
+import sys
+
+import torch
+import numpy as np
+from torch import nn
+from typing_extensions import override
+
+# Add project root to Python path
+sys.path.append(os.getcwd())
+
+import deep_learning.models.mlp as mlp
+
+rng = np.random.default_rng(42)
+print('NumPy version:', np.__version__)
+print('PyTorch version:', torch.__version__)
+```
+
+## 3.5.1 From Modules to a Model
+
+In the preceding derivations, each layer was responsible only for its local computation.
+
+A linear layer knows only the transformation
+
+$$
+Y = XW + b.
+$$
+
+ReLU knows only
+
+$$
+A = \operatorname{ReLU}(H).
+$$
+
+Softmax cross entropy knows only
+
+$$
+L = \operatorname{CrossEntropy}(\operatorname{Softmax}(Z), y).
+$$
+
+A neural network is not an isolated layer. It is a composition of multiple functions:
+
+$$
+f(X) = \operatorname{Linear}_2(\operatorname{ReLU}(\operatorname{Linear}_1(X))).
+$$
+
+Each layer performs a local transformation, and function composition gives the complete network a more expressive mapping.
+
+An MLP implementation must therefore handle three operations:
+
+1. execute the forward pass in layer order;
+2. execute the backward pass in reverse order;
+3. store and update all learnable parameters.
+
+## 3.5.2 Forward Pass of a Two-Layer MLP
+
+Consider MNIST classification. Each image has size $28 \times 28$, so its flattened input dimension is
+
+$$
+D_{\text{in}} = 28 \times 28 = 784.
+$$
+
+If the hidden dimension is $D_{\text{hidden}}$ and the number of classes is $C=10$, the batch input has shape
+
+$$
+X \in \mathbb{R}^{B \times 784}.
+$$
+
+The first linear transformation is
+
+$$
+H = XW_1 + b_1,
+$$
+
+where
+
+$$
+W_1 \in \mathbb{R}^{784 \times D_{\text{hidden}}},
+\quad
+b_1 \in \mathbb{R}^{D_{\text{hidden}}}.
+$$
+
+Therefore,
+
+$$
+H \in \mathbb{R}^{B \times D_{\text{hidden}}}.
+$$
+
+ReLU is then applied:
+
+$$
+A = \operatorname{ReLU}(H).
+$$
+
+ReLU does not change the tensor shape, so
+
+$$
+A \in \mathbb{R}^{B \times D_{\text{hidden}}}.
+$$
+
+The second linear transformation produces the logits:
+
+$$
+Z = AW_2 + b_2,
+$$
+
+where
+
+$$
+W_2 \in \mathbb{R}^{D_{\text{hidden}} \times 10},
+\quad
+b_2 \in \mathbb{R}^{10}.
+$$
+
+Thus,
+
+$$
+Z \in \mathbb{R}^{B \times 10}.
+$$
+
+Finally, softmax cross entropy computes a loss from the logits and labels $y$:
+
+$$
+L = \operatorname{CrossEntropyLoss}(Z, y).
+$$
+
+The input $Z$ contains logits rather than probabilities after softmax. As discussed in the preceding section, combining softmax and cross entropy is numerically more stable and simplifies the backward pass.
+
+## 3.5.3 Backward Pass of a Two-Layer MLP
+
+The forward pass moves from the input to the loss:
+
+$$
+X \rightarrow H \rightarrow A \rightarrow Z \rightarrow L.
+$$
+
+The backward pass propagates gradients in the opposite direction:
+
+$$
+L \rightarrow Z \rightarrow A \rightarrow H \rightarrow X.
+$$
+
+The preceding section derived the gradient of softmax cross entropy:
+
+$$
+\frac{\partial L}{\partial Z} =
+\frac{1}{B}(\hat{Y} - Y).
+$$
+
+Denote this gradient by
+
+$$
+G_Z = \frac{\partial L}{\partial Z}.
+$$
+
+For the second linear layer,
+
+$$
+Z = AW_2 + b_2,
+$$
+
+the gradients are
+
+$$
+\begin{aligned}
+\frac{\partial L}{\partial W_2} &= A^\top G_Z \\
+\frac{\partial L}{\partial b_2} &= \sum_{i=1}^{B} (G_Z)_i \\
+\frac{\partial L}{\partial A} &= G_Z W_2^\top.
+\end{aligned}
+$$
+
+The gradient then passes through ReLU. Since
+
+$$
+A = \operatorname{ReLU}(H),
+$$
+
+we have
+
+$$
+\frac{\partial L}{\partial H} =
+\frac{\partial L}{\partial A}
+\odot \mathbb{1}(H > 0).
+$$
+
+Denote it by
+
+$$
+G_H = G_A \odot \mathbb{1}(H > 0).
+$$
+
+The gradient finally reaches the first linear layer,
+
+$$
+H = XW_1 + b_1,
+$$
+
+whose gradients are
+
+$$
+\begin{aligned}
+\frac{\partial L}{\partial W_1} &= X^\top G_H \\
+\frac{\partial L}{\partial b_1} &= \sum_{i=1}^{B} (G_H)_i \\
+\frac{\partial L}{\partial X} &= G_H W_1^\top.
+\end{aligned}
+$$
+
+When training the model, we usually do not use $\frac{\partial L}{\partial X}$ because the input images are not learnable parameters. The linear layer still returns this gradient so that a preceding layer could continue the backward pass.
+
+## 3.5.4 Implementing the Two-Layer MLP
+
+With the individual modules available, the MLP only needs to organize their call order.
+
+The forward pass calls each layer in sequence:
+
+$$
+X \rightarrow \operatorname{Linear}_1 \rightarrow
+\operatorname{ReLU} \rightarrow \operatorname{Linear}_2.
+$$
+
+The backward pass calls them in reverse order:
+
+$$
+\operatorname{Linear}_2 \rightarrow \operatorname{ReLU}
+\rightarrow \operatorname{Linear}_1.
+$$
+
+```{python}
+class NumPyMLP(mlp.Module):
+    """Two-layer NumPy MLP with manual backpropagation."""
+
+    def __init__(self, input_dim: int, hidden_dim: int, num_classes: int):
+        """Initialize the NumPy MLP.
+
+        Args:
+            input_dim (int): Number of input features per sample.
+            hidden_dim (int): Number of hidden units.
+            num_classes (int): Number of output classes.
+        """
+        super().__init__()
+        self.fc1 = mlp.Linear(input_dim, hidden_dim)
+        self.relu = mlp.ReLU()
+        self.fc2 = mlp.Linear(hidden_dim, num_classes)
+
+    @override
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        """Compute logits for input batch ``x``.
+
+        Args:
+            x (np.ndarray): Input batch with shape ``(batch_size, input_dim)``.
+        """
+        h = self.fc1(x)
+        a = self.relu(h)
+        logits = self.fc2(a)
+        return logits
+
+    @override
+    def backward(self, grad: np.ndarray) -> np.ndarray:
+        """Backpropagate the upstream gradient.
+
+        Args:
+            grad (np.ndarray): Loss gradient with respect to model logits.
+        """
+        grad = self.fc2.backward(grad)
+        grad = self.relu.backward(grad)
+        grad = self.fc1.backward(grad)
+        return grad
+```
+
+The `parameters()` method is omitted here because it is already implemented by `mlp.Module`.
+
+## 3.5.5 A Complete Forward and Backward Pass
+
+We first construct a small random batch to check that the model runs end to end.
+
+Let the input dimension be 4, hidden dimension be 8, and number of classes be 3:
+
+```{python}
+batch_size = 5
+input_dim = 4
+hidden_dim = 8
+num_classes = 3
+
+x = rng.random((batch_size, input_dim))
+y = np.array([0, 1, 2, 1, 0])
+
+model = NumPyMLP(input_dim, hidden_dim, num_classes)
+loss_fn = mlp.CrossEntropyLoss()
+```
+
+Run the forward pass:
+
+```{python}
+logits = model(x)
+loss = loss_fn(logits, y)
+
+print('Logits shape:', logits.shape)
+print('Loss:', loss)
+```
+
+Then start the backward pass from the loss:
+
+```{python}
+dlogits = loss_fn.backward()
+dx = model.backward(dlogits)
+```
+
+Every model parameter should now have a corresponding gradient:
+
+```{python}
+for p in model.parameters():
+    print(f'Parameter shape: {p.shape}\t| Gradient shape: {p.grad.shape}')
+```
+
+Each parameter and its gradient should have the same shape. This check verifies that
+
+1. the forward pass produces logits with the expected shape;
+2. the loss produces a gradient with respect to the logits;
+3. the gradient passes through the second linear layer, ReLU, and the first linear layer;
+4. every learnable parameter receives a gradient of the correct shape.
+
+## 3.5.6 Updating the Parameters
+
+Backpropagation computes gradients but does not change the parameters. The simplest update rule is SGD:
+
+$$
+\theta \leftarrow \theta - \eta \frac{\partial L}{\partial \theta},
+$$
+
+where $\eta$ is the learning rate.
+
+One complete training step is
+
+```{python}
+logits = model(x)
+optimizer = mlp.SGD(model.parameters(), lr = 0.1)
+loss_before = loss_fn(logits, y)
+
+optimizer.zero_grad()
+dlogits = loss_fn.backward()
+model.backward(dlogits)
+optimizer.step()
+
+logits = model(x)
+loss_after = loss_fn(logits, y)
+
+print('Loss before update:', loss_before)
+print('Loss after update:', loss_after)
+```
+
+This example performs only one update on random data, so the loss need not decrease substantially. It demonstrates the basic sequence of a complete training step:
+
+```text
+forward -> loss -> backward -> update
+```
+
+In code,
+
+```python
+# forward
+logits = model(x)
+loss = loss_fn(logits, y)
+
+# backward
+dlogits = loss_fn.backward()
+model.backward(dlogits)
+
+# update
+optimizer.step()
+```
+
+Training over multiple batches repeats these four operations and clears stale gradients before each backward pass when required by the optimizer interface.
+
+## 3.5.7 Implementing the Same MLP in PyTorch
+
+The NumPy version calls each module's `backward` method explicitly, exposing how the chain rule becomes code. The PyTorch model has the same architecture, but autograd records intermediate values and backward rules. We only need to define the computation graph in `forward`.
+
+```{python}
+class PyTorchMLP(nn.Module):
+    """Two-layer PyTorch MLP using autograd."""
+
+    def __init__(self, input_dim: int, hidden_dim: int, num_classes: int):
+        """Initialize the PyTorch MLP.
+
+        Args:
+            input_dim (int): Number of input features per sample.
+            hidden_dim (int): Number of hidden units.
+            num_classes (int): Number of output classes.
+        """
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_dim, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute logits for input batch ``x``.
+
+        Args:
+            x (torch.Tensor): Input batch with shape
+                ``(batch_size, input_dim)``.
+        """
+        h = self.fc1(x)
+        a = self.relu(h)
+        logits = self.fc2(a)
+        return logits
+```
+
+`nn.Linear`, `nn.ReLU`, and `nn.CrossEntropyLoss` correspond to the NumPy modules implemented earlier. The NumPy linear layer stores its weight with shape $(D_{\text{in}}, D_{\text{out}})$ and computes $XW+b$. PyTorch's `nn.Linear` stores its weight with shape $(D_{\text{out}}, D_{\text{in}})$ and computes $XW^\top+b$ internally. Both represent the same linear mapping; only the parameter layout differs.
+
+### 3.5.7.1 Forward Pass and Automatic Differentiation
+
+Run the PyTorch model on a random batch with the same shape:
+
+```{python}
+torch.manual_seed(42)
+
+x_torch = torch.as_tensor(x, dtype = torch.float32)
+y_torch = torch.as_tensor(y, dtype = torch.long)
+
+torch_model = PyTorchMLP(input_dim, hidden_dim, num_classes)
+torch_loss_fn = nn.CrossEntropyLoss()
+
+torch_logits = torch_model(x_torch)
+torch_loss = torch_loss_fn(torch_logits, y_torch)
+
+print('Logits shape:', torch_logits.shape)
+print('Loss:', torch_loss.item())
+```
+
+After `torch_loss.backward()` is called, autograd starts from the scalar loss and applies the chain rule in reverse computation-graph order. Each `nn.Parameter` accumulates its gradient in the `.grad` attribute:
+
+```{python}
+torch_loss.backward()
+
+for name, parameter in torch_model.named_parameters():
+    print(
+        f'{name}: parameter shape = {tuple(parameter.shape)}, '
+        f'gradient shape = {tuple(parameter.grad.shape)}'
+    )
+```
+
+There is no explicit `PyTorchMLP.backward()` method. Matrix multiplication, bias addition, and ReLU are differentiable PyTorch operations, and autograd already provides their local gradient rules.
+
+### 3.5.7.2 A Complete PyTorch Parameter Update
+
+PyTorch optimizers accumulate gradients by default, so each training step begins with `zero_grad()`. One SGD update is
+
+```{python}
+torch_optimizer = torch.optim.SGD(torch_model.parameters(), lr = 0.1)
+
+torch_optimizer.zero_grad()
+torch_logits = torch_model(x_torch)
+torch_loss_before = torch_loss_fn(torch_logits, y_torch)
+torch_loss_before.backward()
+torch_optimizer.step()
+
+with torch.no_grad():
+    torch_logits = torch_model(x_torch)
+    torch_loss_after = torch_loss_fn(torch_logits, y_torch)
+
+print('Loss before update:', torch_loss_before.item())
+print('Loss after update:', torch_loss_after.item())
+```
+
+`torch.no_grad()` prevents operations inside its context from being added to the computation graph. The second forward pass only evaluates the loss after the update and will not be followed by backpropagation, so disabling gradient recording avoids unnecessary memory use.
+
+### 3.5.7.3 Mapping NumPy Operations to PyTorch
+
+| Training operation | Handwritten NumPy implementation | PyTorch implementation |
+|---|---|---|
+| Model forward pass | `logits = model(x)` | `logits = torch_model(x_torch)` |
+| Loss computation | `loss_fn(logits, y)` | `torch_loss_fn(logits, y_torch)` |
+| Start of backward pass | `loss_fn.backward()` | `loss.backward()` |
+| Module backward pass | `model.backward(dlogits)` | autograd traverses the computation graph |
+| Gradient storage | parameter `.grad` | `nn.Parameter.grad` |
+| Parameter update | `optimizer.step()` | `torch_optimizer.step()` |
+| Gradient clearing | `optimizer.zero_grad()` | `torch_optimizer.zero_grad()` |
+
+Both implementations perform the same mathematical operations. The NumPy implementation defines each local gradient in its module, whereas PyTorch builds a computation graph during the forward pass and composes the local rules when `backward()` is called.
+
+## 3.5.8 Why Does Backward Run in Reverse Order?
+
+During the forward pass, data moves through the layers in order:
+
+$$
+X \rightarrow H \rightarrow A \rightarrow Z \rightarrow L.
+$$
+
+Thus, $Z$ depends on $A$, $A$ depends on $H$, and $H$ depends on $X$.
+
+Backpropagation computes the gradient of the loss with respect to each intermediate variable. By the chain rule, the gradient of $L$ with respect to $H$ requires the gradient with respect to $A$ first. Likewise, computing the gradient with respect to $X$ requires the gradient with respect to $H$.
+
+The gradients must therefore propagate backward from the last layer:
+
+$$
+\frac{\partial L}{\partial Z}
+\rightarrow
+\frac{\partial L}{\partial A}
+\rightarrow
+\frac{\partial L}{\partial H}
+\rightarrow
+\frac{\partial L}{\partial X}.
+$$
+
+This is why each module in the NumPy implementation receives an upstream gradient `grad` in `backward` and returns the gradient `dx` for the preceding layer. Although PyTorch autograd hides these explicit calls, it traverses the computation graph according to the same chain rule.
+
+Backpropagation can therefore be understood as a collection of local rules:
+
+> **Each layer only needs to know what it computed during the forward pass and the upstream gradient it receives. It can then compute its parameter gradients and pass another gradient to the preceding layer.**
+
+## 3.5.9 Summary
+
+This section connected the modules from the preceding sections and implemented a two-layer MLP in both NumPy and PyTorch.
+
+The forward pass is
+
+$$
+X
+\rightarrow
+\operatorname{Linear}_1
+\rightarrow
+\operatorname{ReLU}
+\rightarrow
+\operatorname{Linear}_2
+\rightarrow
+Z.
+$$
+
+The loss is
+
+$$
+L = \operatorname{CrossEntropyLoss}(Z, y).
+$$
+
+Backpropagation starts at softmax cross entropy and passes through the modules in reverse order:
+
+$$
+\operatorname{Linear}_2
+\rightarrow
+\operatorname{ReLU}
+\rightarrow
+\operatorname{Linear}_1.
+$$
+
+Finally, SGD updates each parameter:
+
+$$
+\theta \leftarrow \theta - \eta \frac{\partial L}{\partial \theta}.
+$$
+
+The NumPy implementation exposes each layer's local gradient and propagation order. The PyTorch implementation performs the same computations with autograd and uses `nn.Parameter` and an optimizer to manage gradients and parameters. The next section applies the MLP to the MNIST dataset for an image-classification training experiment.
