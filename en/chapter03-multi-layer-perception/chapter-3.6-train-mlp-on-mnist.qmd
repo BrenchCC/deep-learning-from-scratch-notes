@@ -1,0 +1,535 @@
+---
+author: Brench
+date: 2026-07-02
+date-modified: 2026-07-02
+open-graph:
+  title: chapter 3.6-train-mlp-on-mnist
+  description: "3.6 Training an MLP on MNIST with NumPy and PyTorch"
+title: "Chapter 3.6 Training an MLP on MNIST with NumPy and PyTorch"
+order: 6
+---
+
+The preceding section built a two-layer MLP in both NumPy and PyTorch. Its small random inputs were sufficient to verify that the forward pass, backward pass, and parameter updates were connected, but they did not constitute a training experiment. This section applies the same model to MNIST and covers data loading, mini-batch training, test-set evaluation, and inspection of individual predictions.
+
+The NumPy version retains the hand-written training logic and uses TorchVision only to download the data. The PyTorch version uses `Dataset`, `DataLoader`, `nn.Module`, autograd, and an optimizer for the same task. Both implementations follow the same sequence:
+
+```text
+load data -> mini-batch -> forward -> loss -> backward -> update -> evaluate
+```
+
+Comparing the two implementations shows which work PyTorch automates without treating the framework API as a different training algorithm.
+
+```{python}
+import os
+import sys
+import math
+from collections import defaultdict
+
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+import torchvision.datasets as datasets
+from torch import nn
+from torchvision import transforms
+from torch.utils.data import DataLoader as TorchDataLoader
+
+# Add project root to Python path
+sys.path.append(os.getcwd())
+
+import deep_learning
+import deep_learning.models.mlp as mlp
+
+rng = np.random.default_rng(42)
+print('NumPy version:', np.__version__)
+print('PyTorch version:', torch.__version__)
+```
+
+## 3.6.1 Preparing the MNIST Dataset
+
+MNIST contains $28 \times 28$ grayscale images of handwritten digits with labels from 0 through 9. An MLP does not explicitly use the two-dimensional spatial structure, so each image is flattened into a 784-dimensional vector:
+
+```math
+28 \times 28 = 784
+```
+
+The input shape of one batch is
+
+```math
+X \in \mathbb{R}^{B \times 784},
+```
+
+where $B$ is the batch size. TorchVision downloads the training and test sets:
+
+```{python}
+root = deep_learning.get_data_root()
+train_ds = datasets.MNIST(root, train = True, download = True)
+test_ds = datasets.MNIST(root, train = False, download = True)
+```
+
+TorchVision stores the images and labels in the `data` and `targets` attributes. The NumPy version reads these tensors directly, then flattens and normalizes the images:
+
+```{python}
+X_train = train_ds.data.numpy()
+X_train = np.reshape(X_train, (-1, 28 * 28))
+X_train = X_train.astype(np.float32) / 255.0
+y_train = train_ds.targets.numpy()
+
+X_test = test_ds.data.numpy()
+X_test = np.reshape(X_test, (-1, 28 * 28))
+X_test = X_test.astype(np.float32) / 255.0
+y_test = test_ds.targets.numpy()
+
+print('X_train shape:', X_train.shape)
+print('y_train shape:', y_train.shape)
+print('X_test shape:', X_test.shape)
+print('y_test shape:', y_test.shape)
+```
+
+Dividing by 255.0 maps the pixel range from $[0, 255]$ to $[0, 1]$. This operation preserves the image content while limiting the input scale, which reduces large fluctuations in the logits caused by large pixel values.
+
+The following code restores several images to verify that flattening preserved the pixel order:
+
+```{python}
+fig = plt.figure(1, figsize = (8, 2))
+axes = fig.subplots(1, 6)
+for i, ax in enumerate(axes.ravel()):
+    ax.imshow(X_train[i].reshape(28, 28), cmap = 'gray')
+    ax.axis('off')
+    ax.set_title(f'label: {y_train[i]}', fontsize = 10)
+plt.show()
+```
+
+Flattening changes only the input representation. The MLP receives an ordinary vector and does not know which pixels were adjacent in the original image. Section 3.6.10 returns to this limitation.
+
+## 3.6.2 A NumPy Mini-Batch Iterator
+
+One parameter update uses one mini-batch:
+
+```math
+X_{\text{batch}} \in \mathbb{R}^{B \times 784},
+\qquad
+y_{\text{batch}} \in \mathbb{R}^{B}.
+```
+
+Compared with full-batch training, a mini-batch reduces the memory and computation required for each update. Its changing sample composition also introduces some stochasticity into the gradient. The following iterator shuffles the indices at the start of each epoch and returns data in groups of `batch_size`:
+
+```{python}
+class NumPyDataLoader:
+    def __init__(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        batch_size: int,
+        shuffle: bool = True,
+    ):
+        """Initialize a NumPy mini-batch iterator.
+
+        Args:
+            X: Input samples with the batch dimension first.
+            y: Integer class labels aligned with ``X``.
+            batch_size: Maximum number of samples in each batch.
+            shuffle: Whether to shuffle sample indices before each epoch.
+        """
+        self.X = X
+        self.y = y
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+
+    def __iter__(self):
+        """Yield one epoch of mini-batches."""
+        indices = np.arange(len(self.X))
+
+        if self.shuffle:
+            rng.shuffle(indices)
+
+        for start in range(0, len(self.X), self.batch_size):
+            idx = indices[start : start + self.batch_size]
+            yield self.X[idx], self.y[idx]
+
+    def __len__(self):
+        """Return the number of mini-batches in one epoch."""
+        return math.ceil(len(self.X) / self.batch_size)
+```
+
+The final batch can contain fewer than `batch_size` samples, so `__len__` rounds upward. The training loop weights each batch loss by its actual size, preventing a small final batch from receiving the same weight as a full batch.
+
+## 3.6.3 Computing Accuracy from Logits
+
+The model produces 10 logits for each image:
+
+```math
+Z \in \mathbb{R}^{B \times 10}.
+```
+
+The predicted class for sample $i$ is the index of its largest logit:
+
+```math
+\hat{y}_i = \arg\max_j Z_{i,j}.
+```
+
+The corresponding NumPy implementation is
+
+```{python}
+def accuracy(logits: np.ndarray, labels: np.ndarray) -> float:
+    """Compute classification accuracy from logits.
+
+    Args:
+        logits: Class scores with shape ``(batch_size, num_classes)``.
+        labels: Integer class labels with shape ``(batch_size,)``.
+
+    Returns:
+        The fraction of correctly classified samples.
+    """
+    predictions = np.argmax(logits, axis = 1)
+    return float(np.mean(predictions == labels))
+```
+
+Softmax changes the numerical scale but preserves the ordering among classes. Computing predicted classes therefore requires only `argmax` on the logits, without a separate softmax operation.
+
+## 3.6.4 Training the MLP with NumPy
+
+First create the data iterators, model, loss function, and SGD optimizer:
+
+```{python}
+train_dl = NumPyDataLoader(
+    X_train,
+    y_train,
+    batch_size = 128,
+    shuffle = True,
+)
+test_dl = NumPyDataLoader(
+    X_test,
+    y_test,
+    batch_size = 128,
+    shuffle = False,
+)
+
+model = mlp.MLP(input_dim = 784, hidden_dim = 256, num_classes = 10)
+loss_fn = mlp.CrossEntropyLoss()
+optimizer = mlp.SGD(model.parameters(), lr = 0.1)
+
+history = defaultdict(list)
+```
+
+Each mini-batch executes `forward -> loss -> backward -> update`. Evaluation performs only forward computations and does not call `backward()` or `step()`:
+
+```{python}
+num_epochs = 10
+
+for epoch in range(1, num_epochs + 1):
+    train_loss = 0.0
+    correct_samples = 0.0
+
+    for X, y in train_dl:
+        logits = model(X)
+        loss = loss_fn(logits, y)
+
+        dlogits = loss_fn.backward()
+        model.backward(dlogits)
+
+        optimizer.step()
+        optimizer.zero_grad()
+
+        train_loss += loss.item() * len(y)
+        correct_samples += accuracy(logits, y) * len(y)
+
+    avg_train_loss = train_loss / len(train_ds)
+    avg_train_acc = correct_samples / len(train_ds)
+    history['loss'].append(avg_train_loss)
+    history['acc'].append(avg_train_acc)
+
+    test_loss = 0.0
+    correct_samples = 0.0
+
+    for X, y in test_dl:
+        logits = model(X)
+        loss = loss_fn(logits, y)
+
+        test_loss += loss.item() * len(y)
+        correct_samples += accuracy(logits, y) * len(y)
+
+    avg_test_loss = test_loss / len(test_ds)
+    avg_test_acc = correct_samples / len(test_ds)
+    history['test_loss'].append(avg_test_loss)
+    history['test_acc'].append(avg_test_acc)
+
+    width = len(str(num_epochs))
+    print(
+        f'Epoch [{epoch:{width}d}/{num_epochs:{width}d}] '
+        f'| loss: {avg_train_loss:.4f} '
+        f'| acc: {avg_train_acc:.4f} '
+        f'| test_loss: {avg_test_loss:.4f} '
+        f'| test_acc: {avg_test_acc:.4f}'
+    )
+```
+
+Here, `loss_fn.backward()` returns the gradient of the loss with respect to the logits. `model.backward(dlogits)` then propagates it through the second linear layer, ReLU, and the first linear layer. After `optimizer.step()` updates the parameters, `zero_grad()` clears the current gradients before the next batch.
+
+## 3.6.5 Representing the Data and Model in PyTorch
+
+The PyTorch version does not convert the complete dataset to NumPy arrays. `transforms.ToTensor()` converts each PIL image to a `float32` tensor with shape $(1, 28, 28)$ and scales its pixels to $[0, 1]$. `TorchDataLoader` handles shuffling, batch construction, and iteration:
+
+```{python}
+transform = transforms.ToTensor()
+torch_train_ds = datasets.MNIST(
+    root,
+    train = True,
+    download = True,
+    transform = transform,
+)
+torch_test_ds = datasets.MNIST(
+    root,
+    train = False,
+    download = True,
+    transform = transform,
+)
+
+torch_train_dl = TorchDataLoader(torch_train_ds, batch_size = 128, shuffle = True)
+torch_test_dl = TorchDataLoader(torch_test_ds, batch_size = 128, shuffle = False)
+```
+
+The architecture matches the NumPy model. `nn.Flatten()` flattens every dimension after the batch dimension, and ReLU sits between the two `nn.Linear` layers:
+
+```{python}
+torch_model = nn.Sequential(
+    nn.Flatten(),
+    nn.Linear(784, 256),
+    nn.ReLU(),
+    nn.Linear(256, 10),
+)
+
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+elif torch.backends.mps.is_available():
+    device = torch.device('mps')
+else:
+    device = torch.device('cpu')
+
+torch_model = torch_model.to(device)
+torch_loss_fn = nn.CrossEntropyLoss()
+torch_optimizer = torch.optim.SGD(torch_model.parameters(), lr = 0.1)
+torch_history = defaultdict(list)
+
+print('Training device:', device)
+```
+
+`nn.Linear(784, 256)` and the hand-written `mlp.Linear` represent the same mapping, but store their weights in different orientations. The NumPy implementation stores a $(784, 256)$ matrix and computes $XW+b$; PyTorch stores a $(256, 784)$ matrix and computes $XW^\top+b$.
+
+## 3.6.6 Training and Evaluating the MLP with PyTorch
+
+The mathematical process in the PyTorch training loop is unchanged. The main difference is that `loss.backward()` asks autograd to compute gradients along the computation graph, while `torch.optim.SGD` updates the parameters:
+
+```{python}
+for epoch in range(1, num_epochs + 1):
+    torch_model.train()
+    train_loss = 0.0
+    correct_samples = 0
+
+    for images, labels in torch_train_dl:
+        images = images.to(device)
+        labels = labels.to(device)
+
+        torch_optimizer.zero_grad()
+        logits = torch_model(images)
+        loss = torch_loss_fn(logits, labels)
+        loss.backward()
+        torch_optimizer.step()
+
+        train_loss += loss.item() * len(labels)
+        correct_samples += (logits.argmax(dim = 1) == labels).sum().item()
+
+    avg_train_loss = train_loss / len(torch_train_ds)
+    avg_train_acc = correct_samples / len(torch_train_ds)
+    torch_history['loss'].append(avg_train_loss)
+    torch_history['acc'].append(avg_train_acc)
+
+    torch_model.eval()
+    test_loss = 0.0
+    correct_samples = 0
+
+    with torch.inference_mode():
+        for images, labels in torch_test_dl:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            logits = torch_model(images)
+            loss = torch_loss_fn(logits, labels)
+
+            test_loss += loss.item() * len(labels)
+            correct_samples += (logits.argmax(dim = 1) == labels).sum().item()
+
+    avg_test_loss = test_loss / len(torch_test_ds)
+    avg_test_acc = correct_samples / len(torch_test_ds)
+    torch_history['test_loss'].append(avg_test_loss)
+    torch_history['test_acc'].append(avg_test_acc)
+
+    width = len(str(num_epochs))
+    print(
+        f'Epoch [{epoch:{width}d}/{num_epochs:{width}d}] '
+        f'| loss: {avg_train_loss:.4f} '
+        f'| acc: {avg_train_acc:.4f} '
+        f'| test_loss: {avg_test_loss:.4f} '
+        f'| test_acc: {avg_test_acc:.4f}'
+    )
+```
+
+Three state-management operations in this code are easy to omit:
+
+- `torch_model.train()` enables training mode, while `torch_model.eval()` selects evaluation mode. The current MLP contains neither Dropout nor BatchNorm, so both modes produce the same outputs, but switching explicitly remains the correct pattern for models that do contain such layers.
+- PyTorch accumulates parameter gradients by default, so every training step calls `torch_optimizer.zero_grad()`. Placing it before the forward pass makes it explicit that each batch starts with empty gradients.
+- `torch.inference_mode()` disables gradient recording during evaluation, avoiding the memory and scheduling overhead of constructing a computation graph.
+
+## 3.6.7 Mapping the Two Training Loops
+
+The corresponding steps in the NumPy and PyTorch versions are
+
+| Training stage | Hand-written NumPy implementation | PyTorch implementation |
+|---|---|---|
+| Batch construction | `NumPyDataLoader` | `torch.utils.data.DataLoader` |
+| Model forward pass | `logits = model(X)` | `logits = torch_model(images)` |
+| Loss computation | `loss_fn(logits, y)` | `torch_loss_fn(logits, labels)` |
+| Backward pass | `loss_fn.backward()` and `model.backward()` | `loss.backward()` |
+| Parameter update | `optimizer.step()` | `torch_optimizer.step()` |
+| Gradient reset | `optimizer.zero_grad()` | `torch_optimizer.zero_grad()` |
+| Evaluation context | Do not call hand-written `backward()` | `eval()` and `inference_mode()` |
+
+PyTorch removes the explicit code for gradient formulas and parameter traversal; it does not change the steps of gradient descent. The hand-written version is useful for examining local gradients at each layer, while the framework version is easier to extend, move across devices, and compose from standard modules.
+
+## 3.6.8 Inspecting the Training Curves
+
+Plotting the loss and accuracy from both implementations on shared axes checks whether they exhibit similar optimization trends:
+
+```{python}
+epochs = np.arange(1, num_epochs + 1)
+fig, axes = plt.subplots(1, 2, figsize = (12, 4))
+
+axes[0].plot(
+    epochs,
+    history['loss'],
+    marker = 'o',
+    label = 'NumPy train',
+)
+axes[0].plot(
+    epochs,
+    history['test_loss'],
+    marker = 'o',
+    label = 'NumPy test',
+)
+axes[0].plot(
+    epochs,
+    torch_history['loss'],
+    linestyle = '--',
+    label = 'PyTorch train',
+)
+axes[0].plot(
+    epochs,
+    torch_history['test_loss'],
+    linestyle = '--',
+    label = 'PyTorch test',
+)
+axes[0].set_xlabel('Epoch')
+axes[0].set_ylabel('Loss')
+axes[0].set_title('MLP Training Loss')
+axes[0].grid(linestyle = '--', alpha = 0.7)
+axes[0].legend()
+
+axes[1].plot(
+    epochs,
+    history['acc'],
+    marker = 'o',
+    label = 'NumPy train',
+)
+axes[1].plot(
+    epochs,
+    history['test_acc'],
+    marker = 'o',
+    label = 'NumPy test',
+)
+axes[1].plot(
+    epochs,
+    torch_history['acc'],
+    linestyle = '--',
+    label = 'PyTorch train',
+)
+axes[1].plot(
+    epochs,
+    torch_history['test_acc'],
+    linestyle = '--',
+    label = 'PyTorch test',
+)
+axes[1].set_xlabel('Epoch')
+axes[1].set_ylabel('Accuracy')
+axes[1].set_title('MLP Training Accuracy')
+axes[1].grid(linestyle = '--', alpha = 0.7)
+axes[1].legend()
+
+fig.tight_layout()
+plt.show()
+```
+
+The curves need not match point for point. The parameter initialization, batch order, and underlying numerical computations can differ between the two models. The appropriate check is that loss decreases consistently and test accuracy improves during training. A strict implementation comparison would require identical initial parameters and batch order, followed by stepwise comparisons of logits, loss values, and gradients.
+
+## 3.6.9 Inspecting Predictions
+
+The following code samples the same test images and obtains predictions from both models:
+
+```{python}
+indices = rng.choice(len(X_test), size = 10, replace = False)
+x_samples = X_test[indices]
+y_samples = y_test[indices]
+
+numpy_logits = model(x_samples)
+numpy_predictions = np.argmax(numpy_logits, axis = 1)
+
+torch_model.eval()
+with torch.inference_mode():
+    torch_samples = torch.from_numpy(x_samples).reshape(
+        -1,
+        1,
+        28,
+        28,
+    ).to(device)
+    torch_predictions = torch_model(torch_samples).argmax(dim = 1).cpu().numpy()
+```
+
+```{python}
+fig = plt.figure(3, figsize = (10, 4))
+axes = fig.subplots(2, 5)
+for i, ax in enumerate(axes.ravel()):
+    ax.imshow(x_samples[i].reshape(28, 28), cmap = 'gray')
+    ax.axis('off')
+    ax.set_title(
+        f'NumPy: {numpy_predictions[i]}\n'
+        f'PyTorch: {torch_predictions[i]}\n'
+        f'Label: {y_samples[i]}',
+        fontsize = 9,
+    )
+fig.tight_layout()
+plt.show()
+```
+
+Sample-level results reveal failure modes that a single accuracy value can hide, such as joined strokes, slanted writing, or visually similar classes. This is a qualitative check; comparisons of generalization should still use metrics over the complete test set.
+
+## 3.6.10 Limitations of MLPs for Images
+
+An MLP flattens a two-dimensional image into an ordinary vector:
+
+```math
+X = [x_1, x_2, \ldots, x_{784}].
+```
+
+The model does not explicitly use local regions, translation structure, or two-dimensional neighborhoods. Even if two pixels are adjacent in the original image, a linear layer treats them as two independent input dimensions. A CNN encodes neighborhoods with local convolution kernels, while a Vision Transformer divides the image into patches and models relations among those patches. These structures are better suited to more complex image tasks.
+
+MNIST is small and has simple backgrounds, so an MLP is sufficient to demonstrate the complete training mechanism. It includes learnable parameters, a forward pass, a loss function, backpropagation, gradient updates, and test-set evaluation. Its success on this dataset does not remove the effect of architectural inductive bias on more complex data.
+
+## 3.6.11 Summary
+
+This section trained the same two-layer MLP on MNIST in two ways. The NumPy version explicitly implemented mini-batch iteration, loss backpropagation, and parameter updates. The PyTorch version used `DataLoader` to manage batches, `nn.Sequential` to organize the network, and autograd to compute gradients.
+
+Both implementations follow
+
+```text
+forward -> loss -> backward -> update
+```
+
+A framework reduces boilerplate, but the correctness of a hand-written gradient still requires an independent check. The next section introduces numerical gradient checking and uses finite differences to verify analytical gradients.
