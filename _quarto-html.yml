@@ -65,6 +65,8 @@ website:
               contents: "zh/chapter01-introduction/*.qmd"
             - section: "Chapter 2: PyTorch 入门"
               contents: "zh/chatper02-pytorch-introduction/*.qmd"
+            - section: "Chapter 3: 多层感知机"
+              contents: "zh/chapter03-multi-layer-perception/*.qmd"
         - section: "Part 4: Attention 机制与 Transformer"
           contents:
             - section: "Chapter 8: Attention 与 Transformer：从动态检索到序列建模"
@@ -78,3 +80,5 @@ website:
               contents: "en/chapter01-introduction/*.qmd"
             - section: "Chapter 2: Getting Started with PyTorch"
               contents: "en/chatper02-pytorch-introduction/*.qmd"
+            - section: "Chapter 3: Multilayer Perceptrons"
+              contents: "en/chapter03-multi-layer-perception/*.qmd"

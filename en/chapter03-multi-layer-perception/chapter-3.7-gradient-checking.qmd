@@ -1,0 +1,585 @@
+---
+author: Brench
+date: 2026-07-02
+date-modified: 2026-07-02
+open-graph:
+  title: chapter 3.7-gradient-checking
+  description: "3.7 Checking Hand-Written Backpropagation with Numerical Gradients"
+title: "Chapter 3.7 Checking Hand-Written Backpropagation with Numerical Gradients"
+order: 7
+---
+
+The preceding sections implemented the MLP forward pass, backward pass, and parameter updates with NumPy and PyTorch, then trained the model on MNIST. A working training loop does not guarantee that every gradient is correct. It leaves a more specific question:
+
+> **How do we know that a hand-written backward pass is correct?**
+
+Errors in hand-written backpropagation often hide in implementation details:
+
+1. Transposing the wrong operand in a matrix multiplication;
+2. Failing to sum a bias gradient over the batch dimension;
+3. Omitting division by the batch size in cross entropy;
+4. Using the wrong saved value in the ReLU backward pass;
+5. Reversing the gradient sign during a parameter update.
+
+These errors need not raise an exception because the tensor shapes can still match. Instead, they appear as slow convergence, abnormal metrics, or a model that fails to learn.
+
+This section uses numerical gradient checking to verify hand-written backward passes. The method does not depend on the backward formula under inspection. It starts from the definition of a derivative, approximates the gradient with small perturbations, and compares the result with the analytical gradient returned by backward. Agreement between these independent calculation paths provides strong local evidence that the analytical gradient is correct.
+
+```{python}
+import os
+import sys
+from collections.abc import Callable
+
+import torch
+import numpy as np
+import numpy.linalg as npl
+import torch.autograd as AF
+from torch import Tensor
+
+# Add project root to Python path
+sys.path.append(os.getcwd())
+
+import deep_learning.models.mlp as mlp
+
+Func = Callable[[np.ndarray], float]
+
+rng = np.random.default_rng(42)
+print('PyTorch version:', torch.__version__)
+```
+
+## 3.7.1 From the Derivative Definition to a Numerical Gradient
+
+For a scalar function $f(x)$, the derivative is
+
+```math
+\frac{df}{dx} = \lim_{\epsilon \to 0} \frac{f(x + \epsilon) - f(x)}{\epsilon}.
+```
+
+A computer cannot set $\epsilon$ to zero, so it uses a small finite value such as $10^{-5}$ to approximate the derivative.
+
+Gradient checks generally use a central difference:
+
+```math
+\frac{df}{dx} \approx \frac{f(x + \epsilon) - f(x - \epsilon)}{2\epsilon}.
+```
+
+Compared with a one-sided difference that evaluates only $f(x + \epsilon)$, a central difference usually has a smaller truncation error.
+
+If the parameter is a matrix, such as the weight of a linear layer,
+
+```math
+W \in \mathbb{R}^{D_{\text{in}} \times D_{\text{out}}},
+```
+
+each evaluation perturbs only one element $W_{i,j}$:
+
+```math
+\frac{\partial L}{\partial W_{i,j}} \approx
+\frac{L(W_{i,j} + \epsilon) - L(W_{i,j} - \epsilon)}{2\epsilon}.
+```
+
+Repeating this operation element by element estimates the gradient of the entire matrix.
+
+## 3.7.2 A Minimal Numerical Gradient Check
+
+Begin with the function
+
+```math
+f(x) = \sum_i x_i^2.
+```
+
+Its analytical gradient is
+
+```math
+\frac{\partial f}{\partial x_i} = 2x_i.
+```
+
+The following function estimates that gradient numerically:
+
+```{python}
+def numerical_gradient(
+    func: Func,
+    x: np.ndarray,
+    eps: float = 1e-5,
+) -> np.ndarray:
+    """Estimate the gradient of a scalar function with central differences.
+
+    Args:
+        func: Scalar-valued function evaluated at ``x``.
+        x: Array whose elementwise gradient is estimated.
+        eps: Perturbation used by the central-difference formula.
+
+    Returns:
+        The numerical gradient with the same shape as ``x``.
+    """
+    grad = np.zeros_like(x)
+
+    it = np.nditer(x, flags = ['multi_index'], op_flags = ['readwrite'])
+    while not it.finished:
+        idx = it.multi_index
+        old_value = x[idx]
+
+        x[idx] = old_value + eps
+        fx_plus = func(x)
+
+        x[idx] = old_value - eps
+        fx_minus = func(x)
+
+        x[idx] = old_value
+        grad[idx] = (fx_plus - fx_minus) / (2 * eps)
+
+        it.iternext()
+
+    return grad
+```
+
+`func` accepts an array and returns a scalar. `numerical_gradient` perturbs each element of `x` and estimates the derivative at that position.
+
+```{python}
+def func(x: np.ndarray) -> float:
+    """Return the sum of squared elements.
+
+    Args:
+        x: Input array.
+
+    Returns:
+        The scalar sum of squares.
+    """
+    return np.sum(np.square(x))
+
+
+x = np.array([1.0, -2.0, 3.0])
+grad_numeric = numerical_gradient(func, x)
+grad_analytic = 2 * x
+
+print('Numerical Gradient:', grad_numeric)
+print('Analytic Gradient:', grad_analytic)
+```
+
+The two arrays should be nearly identical. A symmetric relative error makes the comparison easier to interpret:
+
+```math
+\mathrm{relative\ error} =
+\frac{\lVert g_{\text{analytic}} - g_{\text{numeric}} \rVert}
+{\lVert g_{\text{analytic}} \rVert + \lVert g_{\text{numeric}} \rVert + \epsilon}.
+```
+
+```{python}
+def relative_error(
+    grad_analytic: np.ndarray,
+    grad_numeric: np.ndarray,
+    eps: float = 1e-12,
+) -> float:
+    """Compute the symmetric relative error between two gradients.
+
+    Args:
+        grad_analytic: Gradient returned by backward propagation.
+        grad_numeric: Gradient estimated with finite differences.
+        eps: Small denominator stabilizer.
+
+    Returns:
+        The relative error as a Python float.
+    """
+    a = npl.norm(grad_analytic - grad_numeric)
+    b = npl.norm(grad_analytic) + npl.norm(grad_numeric) + eps
+    return float(a / b)
+
+
+error = relative_error(grad_analytic, grad_numeric)
+print('Relative Error:', error)
+```
+
+A very small value indicates that the numerical and analytical gradients agree at the tested point.
+
+## 3.7.3 Checking the Linear Backward Pass
+
+The forward pass of a linear layer is
+
+```math
+Y = XW + b.
+```
+
+Let the upstream gradient be
+
+```math
+G = \frac{\partial L}{\partial Y}.
+```
+
+The backward pass returns
+
+```math
+\begin{aligned}
+\frac{\partial L}{\partial X} &= GW^\top, \\
+\frac{\partial L}{\partial W} &= X^\top G, \\
+\frac{\partial L}{\partial b} &= \sum_{i=1}^{B} G_i.
+\end{aligned}
+```
+
+Checking the gradient of `W` requires a scalar loss. A sum of squared outputs is sufficient:
+
+```math
+L = \sum_{i,j} Y_{i,j}^2.
+```
+
+Its gradient with respect to $Y$ is
+
+```math
+\frac{\partial L}{\partial Y} = 2Y.
+```
+
+```{python}
+x = rng.standard_normal((4, 3))
+linear = mlp.Linear(in_features = 3, out_features = 2)
+```
+
+First compute the analytical gradients with the hand-written backward pass:
+
+```{python}
+out = linear(x)
+loss = np.sum(np.square(out))
+dout = 2 * out
+grad_x_analytic = linear.backward(dout)
+
+grad_W_analytic = linear.W.grad.copy()
+grad_b_analytic = linear.b.grad.copy()
+```
+
+Then estimate the gradient of `W` numerically:
+
+```{python}
+def loss_fn_weights(W: np.ndarray) -> float:
+    """Evaluate the linear-layer loss at a candidate weight matrix.
+
+    Args:
+        W: Candidate weight matrix.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    old_W = linear.W
+    linear.W = W
+    out = linear(x)
+    loss = np.sum(np.square(out))
+    linear.W = old_W
+    return loss
+
+
+grad_W_numeric = numerical_gradient(loss_fn_weights, linear.W.copy())
+error = relative_error(grad_W_analytic, grad_W_numeric)
+print('Relative Error for W:', error)
+```
+
+A small relative error provides evidence that `dW` is correct. The same method checks `b`:
+
+```{python}
+def loss_fn_bias(b: np.ndarray) -> float:
+    """Evaluate the linear-layer loss at a candidate bias vector.
+
+    Args:
+        b: Candidate bias vector.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    old_b = linear.b
+    linear.b = b
+    out = linear(x)
+    loss = np.sum(np.square(out))
+    linear.b = old_b
+    return loss
+
+
+grad_b_numeric = numerical_gradient(loss_fn_bias, linear.b.copy())
+error = relative_error(grad_b_analytic, grad_b_numeric)
+print('Relative Error for b:', error)
+```
+
+The input gradient can also be checked:
+
+```{python}
+def loss_fn_x(x: np.ndarray) -> float:
+    """Evaluate the linear-layer loss at a candidate input.
+
+    Args:
+        x: Candidate input array.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    out = linear(x)
+    loss = np.sum(np.square(out))
+    return loss
+
+
+grad_x_numeric = numerical_gradient(loss_fn_x, x.copy())
+error = relative_error(grad_x_analytic, grad_x_numeric)
+print('Relative Error for x:', error)
+```
+
+The three outputs of the linear backward pass now have independent checks:
+
+```text
+X -> dX
+W -> dW
+b -> db
+```
+
+## 3.7.4 Checking the ReLU Backward Pass
+
+The ReLU forward pass is
+
+```math
+A = \mathrm{ReLU}(H) = \max(0, H).
+```
+
+Its backward pass is
+
+```math
+\frac{\partial L}{\partial H} =
+\frac{\partial L}{\partial A}
+\odot \mathbb{1}(H \gt 0).
+```
+
+Use another sum-of-squares loss:
+
+```math
+L = \sum_{i,j} \mathrm{ReLU}(X)_{i,j}^2.
+```
+
+```{python}
+x = rng.standard_normal((4, 5))
+relu = mlp.ReLU()
+
+out = relu(x)
+loss = np.sum(out ** 2)
+dout = 2 * out
+
+grad_x_analytic = relu.backward(dout)
+```
+
+The numerical check is
+
+```{python}
+def loss_fn_relu(x: np.ndarray) -> float:
+    """Evaluate the squared ReLU output at a candidate input.
+
+    Args:
+        x: Candidate ReLU input.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    out = relu(x)
+    loss = np.sum(np.square(out))
+    return loss
+
+
+grad_x_numeric = numerical_gradient(loss_fn_relu, x.copy())
+error = relative_error(grad_x_analytic, grad_x_numeric)
+print('Relative Error for ReLU input gradient:', error)
+```
+
+ReLU is not differentiable at $x = 0$. If an input is close to zero, the two central-difference samples can fall on opposite sides of the kink, so the numerical gradient no longer represents a stable local derivative. A continuous random distribution almost never samples exactly zero, but a robust check should still exclude inputs that are too close to it.
+
+## 3.7.5 Checking the Softmax Cross-Entropy Backward Pass
+
+For combined softmax and cross entropy, the gradient with respect to the logits is
+
+```math
+\frac{\partial L}{\partial Z} = \frac{1}{B}(\hat{Y} - Y),
+```
+
+where $Z$ contains the logits, $\hat{Y}$ contains the softmax probabilities, and $Y$ contains the one-hot labels.
+
+Create a small logits array and label vector:
+
+```{python}
+logits = rng.standard_normal((4, 3))
+y = np.array([0, 2, 1, 2])
+
+loss_fn = mlp.CrossEntropyLoss()
+loss = loss_fn(logits, y)
+grad_logits_analytic = loss_fn.backward()
+```
+
+Estimate the logits gradient numerically:
+
+```{python}
+def loss_fn_logits(logits: np.ndarray) -> float:
+    """Evaluate cross entropy at a candidate logits array.
+
+    Args:
+        logits: Candidate class logits.
+
+    Returns:
+        The mean cross-entropy loss.
+    """
+    loss = loss_fn(logits, y)
+    return loss
+
+
+grad_logits_numeric = numerical_gradient(loss_fn_logits, logits.copy())
+error = relative_error(grad_logits_analytic, grad_logits_numeric)
+print('Relative Error for logits gradient:', error)
+```
+
+A small error confirms that the implementation agrees locally with the softmax cross-entropy derivative derived in Section 3.3.
+
+## 3.7.6 Checking the Parameter Gradients of a Complete MLP
+
+Apply the same method to a complete two-layer MLP:
+
+```text
+X -> Linear -> ReLU -> Linear -> CrossEntropyLoss -> L
+```
+
+Use a small model so the finite-difference calculation remains inexpensive:
+
+```{python}
+x = rng.standard_normal((5, 4))
+y = np.array([0, 1, 2, 1, 0])
+
+model = mlp.MLP(input_dim = 4, hidden_dim = 6, num_classes = 3)
+loss_fn = mlp.CrossEntropyLoss()
+```
+
+Compute the analytical gradient first:
+
+```{python}
+logits = model(x)
+loss = loss_fn(logits, y)
+dlogits = loss_fn.backward()
+dx = model.backward(dlogits)
+
+grad_fc1_W_analytic = model.fc1.W.grad.copy()
+```
+
+Then estimate the gradient of `fc1.W`:
+
+```{python}
+def loss_fn_fc1_weights(W: np.ndarray) -> float:
+    """Evaluate the MLP loss at candidate first-layer weights.
+
+    Args:
+        W: Candidate weight matrix for ``fc1``.
+
+    Returns:
+        The mean cross-entropy loss.
+    """
+    old_W = model.fc1.W
+    model.fc1.W = W
+    logits = model(x)
+    loss = loss_fn(logits, y)
+    model.fc1.W = old_W
+    return loss
+
+
+grad_fc1_W_numeric = numerical_gradient(loss_fn_fc1_weights, model.fc1.W.copy())
+error = relative_error(grad_fc1_W_analytic, grad_fc1_W_numeric)
+print('Relative Error for fc1.W:', error)
+```
+
+The same procedure applies to `fc1.b`, `fc2.W`, and `fc2.b`.
+
+A complete gradient check should not run inside the regular training loop. It is most useful after implementing or modifying backward, with a small model, a small batch, and a fixed random seed.
+
+## 3.7.7 Practical Constraints of Numerical Gradient Checking
+
+Numerical gradient checking has clear operating limits.
+
+First, it is slow. Each parameter element requires two forward passes:
+
+```math
+L(\theta_i + \epsilon), \quad L(\theta_i - \epsilon).
+```
+
+A model with $N$ parameters therefore requires approximately $2N$ forward passes for a full check. The method is suitable for small models, small batches, or a subset of parameters, not repeated checks of the full MNIST model.
+
+Second, $\epsilon$ must be neither too large nor too small. A large value increases truncation error, while a very small value exposes floating-point rounding error. A common starting point is
+
+```math
+\epsilon = 10^{-5}.
+```
+
+Third, `float64` is preferable. Its extra precision makes finite differences less sensitive to rounding error than `float32`.
+
+Fourth, nondifferentiable points require care. For ReLU near zero, the numerical gradient can disagree with the subgradient convention chosen by the implementation.
+
+Finally, a gradient check validates behavior only near the current inputs and parameters. It cannot prove correctness for every input. Tests should cover multiple shapes, parameter values, and activation patterns, and should treat gradient checking as a unit-test technique rather than a formal proof.
+
+## 3.7.8 Gradient Checking in PyTorch
+
+When implementing a custom `torch.autograd.Function`, `torch.autograd.gradcheck` performs the same type of check. It compares a finite-difference approximation with the analytical gradient returned by backward.
+
+```{python}
+class ReLU(AF.Function):
+    @staticmethod
+    def forward(ctx: AF.Function, x: Tensor) -> Tensor:
+        """Apply ReLU and save its input for backward.
+
+        Args:
+            ctx: Autograd context used to save tensors.
+            x: Input tensor.
+
+        Returns:
+            The elementwise ReLU output.
+        """
+        ctx.save_for_backward(x)
+        return x.relu()
+
+    @staticmethod
+    def backward(ctx: AF.Function, grad_output: Tensor) -> Tensor:
+        """Propagate gradients through ReLU.
+
+        Args:
+            ctx: Autograd context containing the saved input.
+            grad_output: Upstream tensor gradient.
+
+        Returns:
+            The gradient with respect to the input.
+        """
+        x = ctx.saved_tensors[0]
+        return grad_output * (x > 0).double()
+
+
+def relu(x: Tensor) -> Tensor:
+    """Apply the custom autograd ReLU function.
+
+    Args:
+        x: Input tensor.
+
+    Returns:
+        The elementwise ReLU output.
+    """
+    return ReLU.apply(x)
+
+
+x = torch.randn(10, dtype = torch.double, requires_grad = True)
+flag = AF.gradcheck(relu, (x,))
+print('Gradient check passed:', flag)
+```
+
+`gradcheck` normally uses `torch.double`, and the inputs must set `requires_grad = True`. Double precision reduces rounding error in the finite-difference calculation.
+
+The NumPy implementation exposes each step of the finite-difference calculation. PyTorch packages the same check as a reusable utility.
+
+## 3.7.9 Summary
+
+This section established an independent validation path for hand-written backward passes with central differences:
+
+```math
+\frac{\partial L}{\partial \theta_i} \approx
+\frac{L(\theta_i + \epsilon) - L(\theta_i - \epsilon)}{2\epsilon}.
+```
+
+Comparing this estimate with the analytical gradient returned by backward can isolate errors in `dx`, `dW`, `db`, and loss-function gradients.
+
+The checks covered:
+
+1. The gradient of a sum-of-squares function;
+2. The `dx`, `dW`, and `db` outputs of `Linear`;
+3. The ReLU input gradient;
+4. The cross-entropy gradient with respect to logits;
+5. One parameter gradient in a complete MLP.
+
+Numerical gradients cost roughly two forward passes per checked parameter element, so they belong in small, focused tests. Their value is that they turn an unexplained training failure into a reproducible local numerical discrepancy. The MLP developed in the preceding sections now has a complete path from component derivation and training to gradient validation.

@@ -15,6 +15,16 @@
 - Chapter 2.7 PyTorch 中的训练循环：把数据、模型和优化器连接起来
 - Chapter 2.8 PyTorch 中的 Checkpoint：中断训练后如何继续
 
+## Chapter 3: 多层感知机
+
+- Chapter 3.1 从线性分类器到 MLP：为什么需要隐藏层
+- Chapter 3.2 激活函数：给神经网络加入非线性
+- Chapter 3.3 Softmax 与 Cross Entropy：从 logits 到分类损失
+- Chapter 3.4 线性层的前向传播与反向传播
+- Chapter 3.5 用 NumPy 与 PyTorch 搭建完整 MLP
+- Chapter 3.6 用 NumPy 与 PyTorch 在 MNIST 上训练 MLP
+- Chapter 3.7 用数值梯度检查手写反向传播
+
 ## Chapter 8: Attention 与 Transformer：从动态检索到序列建模
 
 - Chapter 8.1 Bahdanau Attention：从信息压缩到动态检索

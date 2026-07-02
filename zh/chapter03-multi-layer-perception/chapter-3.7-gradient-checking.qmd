@@ -1,0 +1,598 @@
+---
+author: Brench
+date: 2026-07-02
+date-modified: 2026-07-02
+open-graph:
+  title: chapter 3.7-gradient-checking
+  description: "3.7 用数值梯度检查手写反向传播"
+title: "Chapter 3.7 用数值梯度检查手写反向传播"
+order: 7
+---
+
+前面几节用 NumPy 和 PyTorch 实现了 MLP 的 forward、backward 与参数更新，并在 MNIST 上完成了训练。训练流程能够运行，并不说明每一项梯度都计算正确。这里需要回答一个更具体的问题：
+
+> **我们怎么知道自己写的 backward 真的是对的？**
+
+手写反向传播的错误通常藏在实现细节中：
+
+1. 矩阵乘法时转置方向写反；
+2. Bias 的梯度忘记沿 batch 维度求和；
+3. Cross entropy 里忘记除以 batch size；
+4. ReLU backward 用错了前向传播时保存的中间变量；
+5. 参数更新时把梯度符号写反。
+
+这些错误未必触发异常，因为张量形状仍可能匹配；它们会表现为收敛变慢、指标异常，甚至模型完全无法学习。
+
+本节使用数值梯度检查（gradient checking）验证手写 backward。该方法不依赖待检查的反向传播公式，而是从导数定义出发，用微小扰动近似梯度，再与 backward 给出的解析梯度比较。两条计算路径相互独立，因此数值接近时，解析梯度的可信度会明显提高。
+
+```{python}
+import os
+import sys
+from collections.abc import Callable
+
+import torch
+import numpy as np
+import numpy.linalg as npl
+import torch.autograd as AF
+from torch import Tensor
+
+# Add project root to Python path
+sys.path.append(os.getcwd())
+
+import deep_learning.models.mlp as mlp
+
+Func = Callable[[np.ndarray], float]
+
+rng = np.random.default_rng(42)
+print('PyTorch version:', torch.__version__)
+```
+
+## 3.7.1 从导数定义到数值梯度
+
+对于一元函数 $f(x)$，导数可以写成：
+
+```math
+\frac{df}{dx} = \lim_{\epsilon \to 0} \frac{f(x + \epsilon) - f(x)}{\epsilon}
+```
+
+在计算机里，我们不能真的让 $\epsilon$ 变成 0，所以可以取一个很小的数，例如 $10^{-5}$，用它来近似导数。
+
+不过实际做数值梯度检查时，更常用的是中心差分（central difference）：
+
+```math
+\frac{df}{dx} \approx \frac{f(x + \epsilon) - f(x - \epsilon)}{2\epsilon}
+```
+
+相比只看 $f(x + \epsilon)$ 的单边差分，中心差分通常更稳定一些。
+
+如果参数不是一个标量，而是一个矩阵，例如线性层的权重：
+
+```math
+W \in \mathbb{R}^{D_{\text{in}} \times D_{\text{out}}}
+```
+
+那么我们可以每次只扰动其中一个元素 $W_{i,j}$：
+
+```math
+\frac{\partial L}{\partial W_{i,j}} \approx
+\frac{L(W_{i,j} + \epsilon) - L(W_{i,j} - \epsilon)}{2\epsilon}
+```
+
+这样就能逐个元素估计出整个矩阵的梯度。这就是数值梯度检查的基本想法。
+
+## 3.7.2 数值梯度检查的最小例子
+
+先从一个简单函数开始：
+
+```math
+f(x) = \sum_i x_i^2
+```
+
+它的解析梯度很容易写出来：
+
+```math
+\frac{\partial f}{\partial x_i} = 2x_i
+```
+
+我们可以用数值梯度验证这一点。
+
+```{python}
+def numerical_gradient(
+    func: Func,
+    x: np.ndarray,
+    eps: float = 1e-5,
+) -> np.ndarray:
+    """Estimate the gradient of a scalar function with central differences.
+
+    Args:
+        func: Scalar-valued function evaluated at ``x``.
+        x: Array whose elementwise gradient is estimated.
+        eps: Perturbation used by the central-difference formula.
+
+    Returns:
+        The numerical gradient with the same shape as ``x``.
+    """
+    grad = np.zeros_like(x)
+
+    it = np.nditer(x, flags = ['multi_index'], op_flags = ['readwrite'])
+    while not it.finished:
+        idx = it.multi_index
+        old_value = x[idx]
+
+        x[idx] = old_value + eps
+        fx_plus = func(x)
+
+        x[idx] = old_value - eps
+        fx_minus = func(x)
+
+        x[idx] = old_value
+        grad[idx] = (fx_plus - fx_minus) / (2 * eps)
+
+        it.iternext()
+
+    return grad
+```
+
+这里的 `func` 是一个函数，输入是一个数组，输出是一个标量。`numerical_gradient` 会逐个扰动 `x` 中的元素，并估计每个位置的梯度。
+
+测试一下：
+
+```{python}
+def func(x: np.ndarray) -> float:
+    """Return the sum of squared elements.
+
+    Args:
+        x: Input array.
+
+    Returns:
+        The scalar sum of squares.
+    """
+    return np.sum(np.square(x))
+
+
+x = np.array([1.0, -2.0, 3.0])
+grad_numeric = numerical_gradient(func, x)
+grad_analytic = 2 * x
+
+print('Numerical Gradient:', grad_numeric)
+print('Analytic Gradient:', grad_analytic)
+```
+
+两者应该非常接近。
+
+为了更方便地比较，我们可以定义一个相对误差：
+
+```math
+\mathrm{relative\ error} =
+\frac{\lVert g_{\text{analytic}} - g_{\text{numeric}} \rVert}
+{\lVert g_{\text{analytic}} \rVert + \lVert g_{\text{numeric}} \rVert + \epsilon}
+```
+
+```{python}
+def relative_error(
+    grad_analytic: np.ndarray,
+    grad_numeric: np.ndarray,
+    eps: float = 1e-12,
+) -> float:
+    """Compute the symmetric relative error between two gradients.
+
+    Args:
+        grad_analytic: Gradient returned by backward propagation.
+        grad_numeric: Gradient estimated with finite differences.
+        eps: Small denominator stabilizer.
+
+    Returns:
+        The relative error as a Python float.
+    """
+    a = npl.norm(grad_analytic - grad_numeric)
+    b = npl.norm(grad_analytic) + npl.norm(grad_numeric) + eps
+    return float(a / b)
+
+
+error = relative_error(grad_analytic, grad_numeric)
+print('Relative Error:', error)
+```
+
+如果这个值非常小，通常说明解析梯度和数值梯度是一致的。
+
+## 3.7.3 检查 Linear 层的 backward
+
+接下来检查我们前面写过的 `Linear` 层。
+
+线性层的前向传播是：
+
+```math
+Y = XW + b
+```
+
+如果上游梯度是：
+
+```math
+G = \frac{\partial L}{\partial Y}
+```
+
+那么反向传播结果是：
+
+```math
+\begin{aligned}
+\frac{\partial L}{\partial X} &= GW^\top \\
+\frac{\partial L}{\partial W} &= X^\top G \\
+\frac{\partial L}{\partial b} &= \sum_{i=1}^{B} G_i
+\end{aligned}
+```
+
+为了检查 `W` 的梯度，我们需要构造一个标量 loss。这里用一个非常简单的函数：
+
+```math
+L = \sum_{i,j} Y_{i,j}^2
+```
+
+也就是把线性层输出的所有元素平方后求和。
+
+这个 loss 对输出 $Y$ 的梯度是：
+
+```math
+\frac{\partial L}{\partial Y} = 2Y
+```
+
+```{python}
+x = rng.standard_normal((4, 3))
+linear = mlp.Linear(in_features = 3, out_features = 2)
+```
+
+先用手写 backward 得到解析梯度：
+
+```{python}
+out = linear(x)
+loss = np.sum(np.square(out))
+dout = 2 * out
+grad_x_analytic = linear.backward(dout)
+
+grad_W_analytic = linear.W.grad.copy()
+grad_b_analytic = linear.b.grad.copy()
+```
+
+再用数值梯度检查 `W`：
+
+```{python}
+def loss_fn_weights(W: np.ndarray) -> float:
+    """Evaluate the linear-layer loss at a candidate weight matrix.
+
+    Args:
+        W: Candidate weight matrix.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    old_W = linear.W
+    linear.W = W
+    out = linear(x)
+    loss = np.sum(np.square(out))
+    linear.W = old_W
+    return loss
+
+
+grad_W_numeric = numerical_gradient(loss_fn_weights, linear.W.copy())
+error = relative_error(grad_W_analytic, grad_W_numeric)
+print('Relative Error for W:', error)
+```
+
+如果相对误差很小，说明 `dW` 大概率是对的。
+
+同样可以检查 `b`：
+
+```{python}
+def loss_fn_bias(b: np.ndarray) -> float:
+    """Evaluate the linear-layer loss at a candidate bias vector.
+
+    Args:
+        b: Candidate bias vector.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    old_b = linear.b
+    linear.b = b
+    out = linear(x)
+    loss = np.sum(np.square(out))
+    linear.b = old_b
+    return loss
+
+grad_b_numeric = numerical_gradient(loss_fn_bias, linear.b.copy())
+error = relative_error(grad_b_analytic, grad_b_numeric)
+print('Relative Error for b:', error)
+```
+
+也可以检查对输入 `x` 的梯度：
+
+```{python}
+def loss_fn_x(x: np.ndarray) -> float:
+    """Evaluate the linear-layer loss at a candidate input.
+
+    Args:
+        x: Candidate input array.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    out = linear(x)
+    loss = np.sum(np.square(out))
+    return loss
+
+
+grad_x_numeric = numerical_gradient(loss_fn_x, x.copy())
+error = relative_error(grad_x_analytic, grad_x_numeric)
+print('Relative Error for x:', error)
+```
+
+至此，线性层 backward 的三项结果都获得了独立检查：
+
+```text
+X -> dX
+W -> dW
+b -> db
+```
+
+## 3.7.4 检查 ReLU 的 backward
+
+ReLU 的前向传播是：
+
+```math
+A = \mathrm{ReLU}(H) = \max(0, H)
+```
+
+反向传播是：
+
+```math
+\frac{\partial L}{\partial H} =
+\frac{\partial L}{\partial A}
+\odot \mathbb{1}(H \gt 0)
+```
+
+同样构造一个简单 loss：
+
+```math
+L = \sum_{i,j} \mathrm{ReLU}(X)_{i,j}^2
+```
+
+```{python}
+x = rng.standard_normal((4, 5))
+relu = mlp.ReLU()
+
+out = relu(x)
+loss = np.sum(out ** 2)
+dout = 2 * out
+
+grad_x_analytic = relu.backward(dout)
+```
+
+数值梯度：
+
+```{python}
+def loss_fn_relu(x: np.ndarray) -> float:
+    """Evaluate the squared ReLU output at a candidate input.
+
+    Args:
+        x: Candidate ReLU input.
+
+    Returns:
+        The sum-of-squares loss.
+    """
+    out = relu(x)
+    loss = np.sum(np.square(out))
+    return loss
+
+
+grad_x_numeric = numerical_gradient(loss_fn_relu, x.copy())
+error = relative_error(grad_x_analytic, grad_x_numeric)
+print('Relative Error for ReLU input gradient:', error)
+```
+
+ReLU 在 $x = 0$ 处不可导。如果输入接近 0，中心差分的两个采样点可能落在折点两侧，数值梯度便无法对应某个稳定的局部导数。随机连续分布几乎不会精确采到 0，但实际检查仍应排除离 0 过近的输入。
+
+## 3.7.5 检查 Softmax Cross Entropy 的 backward
+
+前面我们推导过，softmax 和 cross entropy 合在一起时，对 logits 的梯度有一个非常简洁的形式：
+
+```math
+\frac{\partial L}{\partial Z} = \frac{1}{B}(\hat{Y} - Y)
+```
+
+其中，$Z$ 是 logits，$\hat{Y}$ 是 softmax 概率，$Y$ 是 one-hot 标签。
+
+构造 logits 和标签：
+
+```{python}
+logits = rng.standard_normal((4, 3))
+y = np.array([0, 2, 1, 2])
+
+loss_fn = mlp.CrossEntropyLoss()
+loss = loss_fn(logits, y)
+grad_logits_analytic = loss_fn.backward()
+```
+
+数值梯度：
+
+```{python}
+def loss_fn_logits(logits: np.ndarray) -> float:
+    """Evaluate cross entropy at a candidate logits array.
+
+    Args:
+        logits: Candidate class logits.
+
+    Returns:
+        The mean cross-entropy loss.
+    """
+    loss = loss_fn(logits, y)
+    return loss
+
+
+grad_logits_numeric = numerical_gradient(loss_fn_logits, logits.copy())
+error = relative_error(grad_logits_analytic, grad_logits_numeric)
+print('Relative Error for logits gradient:', error)
+```
+
+如果这里的误差很小，就说明我们在 3.3 中推导的 softmax + cross entropy backward 实现是正确的。
+
+## 3.7.6 检查完整 MLP 的参数梯度
+
+最后，我们可以把这个方法用到完整 MLP 上。两层 MLP 的结构是：
+
+```text
+X -> Linear -> ReLU -> Linear -> CrossEntropyLoss -> L
+```
+
+我们可以检查其中某一个参数，例如第一层的权重 `fc1.W`。为了让数值梯度检查更快，我们只用一个很小的模型：
+
+```{python}
+x = rng.standard_normal((5, 4))
+y = np.array([0, 1, 2, 1, 0])
+
+model = mlp.MLP(input_dim = 4, hidden_dim = 6, num_classes = 3)
+loss_fn = mlp.CrossEntropyLoss()
+```
+
+先用 backward 得到解析梯度：
+
+```{python}
+logits = model(x)
+loss = loss_fn(logits, y)
+dlogits = loss_fn.backward()
+dx = model.backward(dlogits)
+
+grad_fc1_W_analytic = model.fc1.W.grad.copy()
+```
+
+再用数值梯度估计 `fc1.W` 的梯度：
+
+```{python}
+def loss_fn_fc1_weights(W: np.ndarray) -> float:
+    """Evaluate the MLP loss at candidate first-layer weights.
+
+    Args:
+        W: Candidate weight matrix for ``fc1``.
+
+    Returns:
+        The mean cross-entropy loss.
+    """
+    old_W = model.fc1.W
+    model.fc1.W = W
+    logits = model(x)
+    loss = loss_fn(logits, y)
+    model.fc1.W = old_W
+    return loss
+
+
+grad_fc1_W_numeric = numerical_gradient(loss_fn_fc1_weights, model.fc1.W.copy())
+error = relative_error(grad_fc1_W_analytic, grad_fc1_W_numeric)
+print('Relative Error for fc1.W:', error)
+```
+
+同理，也可以检查 `fc1.b`、`fc2.W` 和 `fc2.b`。
+
+完整 gradient check 不应进入常规训练循环。更合适的用法是在实现或修改 backward 后，用小模型、小 batch 和固定随机种子检查少量参数。
+
+## 3.7.7 数值梯度检查的注意事项
+
+数值梯度检查有明确的适用边界。
+
+首先，它很慢。因为每个参数都要分别做两次前向传播：
+
+```math
+L(\theta_i + \epsilon), \quad L(\theta_i - \epsilon)
+```
+
+如果模型有 $N$ 个参数，那么数值梯度大约需要 $2N$ 次 forward。因此，它只适合小模型、小 batch 和少量参数检查，不适合在完整 MNIST 模型上频繁运行。
+
+其次，$\epsilon$ 不能太大，也不能太小。太大时，近似会不够精确；太小时，浮点数误差会变明显。常见选择是：
+
+```math
+\epsilon = 10^{-5}
+```
+
+第三，最好使用 `float64` 做检查。`float32` 的数值精度较低，在 gradient check 中更容易出现误差。
+
+第四，需要避开不可导点。以 ReLU 为例，输入落在 0 附近时，数值梯度与实现所采用的次梯度约定可能不一致。
+
+最后，gradient check 只验证当前输入与参数邻域内的行为，不能证明实现对所有输入都正确。测试时应覆盖不同形状、参数和激活模式，并把它视为单元测试的一部分，而不是正确性的形式化证明。
+
+## 3.7.8 PyTorch 中的 Gradient Check
+
+自定义 `torch.autograd.Function` 时，可以用 `torch.autograd.gradcheck` 执行同类检查。其判定依据与本节相同：
+
+> **用数值梯度近似导数，再和 backward 给出的解析梯度对比。**
+
+例如：
+
+```{python}
+class ReLU(AF.Function):
+    @staticmethod
+    def forward(ctx: AF.Function, x: Tensor) -> Tensor:
+        """Apply ReLU and save its input for backward.
+
+        Args:
+            ctx: Autograd context used to save tensors.
+            x: Input tensor.
+
+        Returns:
+            The elementwise ReLU output.
+        """
+        ctx.save_for_backward(x)
+        return x.relu()
+
+    @staticmethod
+    def backward(ctx: AF.Function, grad_output: Tensor) -> Tensor:
+        """Propagate gradients through ReLU.
+
+        Args:
+            ctx: Autograd context containing the saved input.
+            grad_output: Upstream tensor gradient.
+
+        Returns:
+            The gradient with respect to the input.
+        """
+        x = ctx.saved_tensors[0]
+        return grad_output * (x > 0).double()
+
+
+def relu(x: Tensor) -> Tensor:
+    """Apply the custom autograd ReLU function.
+
+    Args:
+        x: Input tensor.
+
+    Returns:
+        The elementwise ReLU output.
+    """
+    return ReLU.apply(x)
+
+
+x = torch.randn(10, dtype = torch.double, requires_grad = True)
+flag = AF.gradcheck(relu, (x,))
+print('Gradient check passed:', flag)
+```
+
+`gradcheck` 通常使用 `torch.double`，输入还需设置 `requires_grad = True`。双精度能够减小有限差分中的舍入误差。
+
+NumPy 版本显式展示了有限差分的计算过程；PyTorch 的 `gradcheck` 则把同一套检查封装成可复用工具。
+
+## 3.7.9 本章小结
+
+本节用中心差分为手写 backward 建立了一条独立验证路径：
+
+```math
+\frac{\partial L}{\partial \theta_i} \approx
+\frac{L(\theta_i + \epsilon) - L(\theta_i - \epsilon)}{2\epsilon}
+```
+
+将该结果与 backward 得到的解析梯度比较，可以定位 `dx`、`dW`、`db` 以及损失函数梯度中的实现错误。
+
+我们分别检查了：
+
+1. 简单平方函数的梯度；
+2. `Linear` 层的 `dx`、`dW` 和 `db`；
+3. `ReLU` 的输入梯度；
+4. `CrossEntropyLoss` 对 logits 的梯度；
+5. 完整 MLP 中某个参数的梯度。
+
+数值梯度的成本约为每个待检查参数两次 forward，因此只适合小规模测试。它的价值在于把梯度错误从训练指标异常缩小为可复现的局部数值差异。至此，前面实现的 MLP 已具备从组件推导、完整训练到梯度验证的闭环。
