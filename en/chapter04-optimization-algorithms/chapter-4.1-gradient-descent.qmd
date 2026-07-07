@@ -1,0 +1,522 @@
+---
+author: jshn9515
+date: 2026-07-08
+date-modified: 2026-07-08
+open-graph:
+  title: chapter4.1-gradient-descent
+  description: "4.1 From Gradient Descent to SGD"
+title: "Chapter 4.1 From Gradient Descent to SGD"
+order: 1
+---
+
+The previous chapters described a neural network as a parameterized function. Given an input $x$, the model produces a prediction through forward propagation, and the loss function measures the gap between the prediction and the true label. Training means adjusting the model parameters so that the loss decreases.
+
+Let $\theta$ denote all learnable parameters in the model, and let $L(\theta)$ denote the loss under the current parameters. Training a neural network is therefore an optimization problem:
+
+```math
+\min_\theta L(\theta)
+```
+
+This objective looks simple, but it raises a central question:
+
+> **How do we know which direction the parameters should move?**
+
+Automatic differentiation can compute gradients. For a parameter $\theta$, the gradient $\nabla_\theta L(\theta)$ describes how the loss changes under a small parameter perturbation. But knowing the gradient is not the whole training procedure. The gradient only gives a local direction. In actual training, we still need to decide:
+
+1. Which direction the parameters should move;
+2. How far they should move at each step;
+3. How much data should be used to estimate that direction.
+
+This section starts from the most basic form of gradient descent and explains the logic behind "updating parameters according to gradients." It then discusses why deep learning more often uses stochastic gradient descent, commonly called **SGD (Stochastic Gradient Descent)** [@bottou2012SGD], rather than full gradient descent.
+
+```{python}
+from collections.abc import Iterable
+from typing import override
+
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch import Tensor
+
+plt.rc('figure', dpi = 100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.1.1 What Does the Gradient Tell Us?
+
+Start with the simplest case: there is only one parameter $\theta$, and the loss function is $L(\theta)$.
+
+At the current parameter value $\theta_t$, the gradient
+
+```math
+\frac{dL}{d\theta}
+```
+
+describes the local direction in which the loss changes.
+
+If the gradient is positive, increasing $\theta$ increases the loss, so decreasing $\theta$ should reduce the loss. If the gradient is negative, increasing $\theta$ decreases the loss, so increasing $\theta$ should reduce the loss.
+
+In both cases, a natural choice is to update the parameter in the opposite direction of the gradient:
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{dL}{d\theta}
+```
+
+Here, $\eta$ is the **learning rate**, which controls how far each step moves.
+
+If the model has more than one parameter and $\theta$ is a vector, the update rule becomes
+
+```math
+\theta_{t+1} = \theta_t - \eta \nabla_\theta L(\theta_t)
+```
+
+This is the basic form of **Gradient Descent**.
+
+Intuitively, gradient descent is like walking downhill on a slope. The gradient at the current position points in the steepest uphill direction, and the negative gradient points in the steepest downhill direction. Each update takes a small step along the negative gradient, with the hope of reaching a lower-loss region over time.
+
+The choice of learning rate $\eta$ matters. If the learning rate is too small, each step is cautious and training is slow. The loss may decrease stably, but it can take many iterations to approach good parameters. If the learning rate is too large, a step may overshoot the minimum. In more severe cases, the parameters oscillate on the loss surface, the loss stops decreasing, and training becomes unstable. The learning rate is therefore one of the most important hyperparameters in optimization.
+
+One way to interpret the learning rate is as the model's trust in the current gradient. A larger learning rate is more aggressive: it assumes the current gradient direction remains useful over a longer distance. A smaller learning rate is more conservative and only moves a little in the current direction.
+
+Later chapters will show that many optimizers are closely related to learning rates. Adagrad, RMSprop, and Adam adapt the learning rate for different parameters; learning rate schedulers change the global learning rate during training. In basic gradient descent, however, the learning rate is a fixed manually chosen number.
+
+## 4.1.2 Observing Gradient Descent with a Simple Example
+
+To make gradient descent more concrete, consider a simple function instead of a neural network:
+
+```math
+L(\theta) = 0.1 (x - 2)^2 + 2.0 (y + 1)^2
+```
+
+The minimum is clearly at $(x, y) = (2, -1)$. If we start far away, such as at $(x, y) = (-5, 2)$, gradient descent should gradually push the parameters toward $(2, -1)$.
+
+First define the loss function:
+
+```{python}
+def loss_fn(theta: Tensor) -> Tensor:
+    """Compute a two-dimensional quadratic loss.
+
+    Args:
+        theta: Tensor containing ``x`` and ``y`` parameters.
+
+    Returns:
+        Scalar quadratic loss value.
+    """
+    x, y = theta[0], theta[1]
+    return 0.1 * (x - 2) ** 2 + 2.0 * (y + 1) ** 2
+```
+
+Then implement a minimal gradient descent optimizer:
+
+```{python}
+class SimpleSGD(dopt.Optimizer):
+    def __init__(self, params: Iterable[Tensor], lr: float = 1e-3):
+        """Initialize a minimal SGD optimizer.
+
+        Args:
+            params: Iterable of tensors updated by the optimizer.
+            lr: Learning rate used for each update.
+        """
+        super().__init__(params)
+        self.lr = lr
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        """Update parameters with their current gradients."""
+        for p in self.params:
+            if p.grad is None:
+                continue
+
+            p.sub_(p.grad, alpha = self.lr)
+```
+
+Run gradient descent and inspect the parameter trajectory:
+
+```{python}
+theta = torch.tensor([-5.0, 2.0], requires_grad = True)
+optimizer = SimpleSGD([theta], lr = 0.4)
+history = dopt.run_optimizer(optimizer, loss_fn, steps = 40)
+
+print('Final theta:', history[-1])
+print('Final loss:', loss_fn(history[-1]).item())
+```
+
+Plot the trajectory:
+
+```{python}
+x = torch.linspace(-6.5, 5.5, 200)
+y = torch.linspace(-3.5, 2.5, 200)
+X, Y = torch.meshgrid(x, y, indexing = 'ij')
+Z = 0.1 * (X - 2) ** 2 + 2.0 * (Y + 1) ** 2
+
+fig = plt.figure(1)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels = 25, cmap = 'YlGnBu')
+ax.plot(
+    history[:, 0],
+    history[:, 1],
+    color = '#EC705B',
+    marker = 'o',
+    markersize = 3,
+    markerfacecolor = '#C0392B',
+    markeredgecolor = 'white',
+    markeredgewidth = 0.5,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.set_title('SGD on a Simple Quadratic Function')
+plt.show()
+```
+
+The trajectory shows that the parameters are far from the optimum at the beginning, where the gradient is large and each step is visibly larger. As the parameters approach $(2, -1)$, the gradient becomes smaller, and the update length shrinks naturally. This is a basic property of gradient descent: even with a fixed learning rate, the actual update size depends on the gradient magnitude. Far from the minimum, gradients are often larger and parameters move faster; near the minimum, gradients shrink and the movement slows down.
+
+## 4.1.3 From a Single Sample to the Full Dataset
+
+The previous example used a simple analytical loss function. In supervised learning, we usually have a training set:
+
+```math
+\mathcal{D} = \{(x_1, y_1), (x_2, y_2), \dots, (x_N, y_N)\}
+```
+
+With model parameters $\theta$, each sample $(x_i, y_i)$ produces a loss:
+
+```math
+\ell_i(\theta) = \ell(f_\theta(x_i), y_i)
+```
+
+The average loss over the full training set is
+
+```math
+L(\theta) = \frac{1}{N} \sum_{i=1}^N \ell_i(\theta)
+```
+
+If we follow gradient descent strictly, we compute the average loss over the entire training set and then differentiate it:
+
+```math
+\nabla_\theta L(\theta) = \frac{1}{N} \sum_{i=1}^N \nabla_\theta \ell_i(\theta)
+```
+
+Then we update the parameters:
+
+```math
+\theta_{t+1} = \theta_t - \eta \nabla_\theta L(\theta_t)
+```
+
+This is usually called **Batch Gradient Descent**: every update uses the full training set.
+
+Mathematically, this procedure is clean. Each update uses the gradient of the actual training objective, so the direction is relatively stable and does not depend on the noise of a single sample. The cost is the problem: when the dataset is large, every parameter update requires a full pass over all training examples.
+
+If there are millions of images, updating parameters once would require forward and backward propagation through all of them. Training would be extremely slow. Deep learning also usually needs thousands or millions of update steps. Using the full dataset at every step would make the compute cost impractical.
+
+Batch gradient descent is conceptually simple, but it is not the form most often used in modern deep learning.
+
+## 4.1.4 Stochastic Gradient Descent: Avoiding the Full Dataset at Every Step
+
+If using the full training set at every step is too expensive, the next question is natural:
+
+> **Can we look at only part of the data and still obtain a useful update direction?**
+
+This is the core idea behind stochastic gradient descent.
+
+The most extreme version randomly samples one example $(x_i, y_i)$ at each step and uses the gradient of that example's loss to approximate the full-dataset gradient:
+
+```math
+\nabla_\theta L(\theta) \approx \nabla_\theta \ell_i(\theta)
+```
+
+The parameter update becomes
+
+```math
+\theta_{t+1} = \theta_t - \eta \nabla_\theta \ell_i(\theta_t)
+```
+
+This is **Stochastic Gradient Descent** in its original sense.
+
+Its advantage is that each update is cheap because it only computes the gradient of one example. Its drawback is that the direction is noisy. A single example may not represent the full training set, so an update direction can be biased, and it may even temporarily increase the overall loss. Over the long run, if examples are sampled randomly, these noisy directions fluctuate around the true gradient direction. The model no longer moves exactly in the steepest descent direction of the full loss at every step; instead, it gradually approaches a good region under noise.
+
+This noise is not purely harmful. On the non-convex loss surfaces of deep learning, moderate stochasticity can sometimes help the model escape narrow or poor regions. Too much noise, however, makes training unstable. In practice, we rarely use a single example per update and instead use mini-batches.
+
+## 4.1.5 Mini-batch SGD: The Default Training Pattern in Deep Learning
+
+In modern deep learning, what we call SGD often means **Mini-batch SGD**. Each update uses neither one sample nor the full training set, but a small randomly selected batch:
+
+```math
+\mathcal{B} = \{(x_i, y_i)\}_{i \in B}
+```
+
+Then we compute the average loss on the mini-batch:
+
+```math
+L_{\mathcal{B}}(\theta) = \frac{1}{|\mathcal{B}|} \sum_{i \in B} \ell_i(\theta)
+```
+
+and use its gradient to update parameters:
+
+```math
+\theta_{t+1} = \theta_t - \eta \nabla_\theta L_{\mathcal{B}}(\theta_t)
+```
+
+Mini-batch SGD sits between full batch gradient descent and single-sample SGD. A large batch size gives a more stable gradient estimate, but each step costs more and there are fewer updates per pass over the dataset. A small batch size makes each step cheaper and updates more frequent, but the gradient has more noise and the training curve can be more unstable. Mini-batch training is therefore a tradeoff between computational efficiency and gradient-estimation quality.
+
+From an implementation perspective, a common PyTorch training loop is exactly mini-batch SGD:
+
+```{python}
+model = nn.Linear(1, 1)
+optimizer = optim.SGD(model.parameters(), lr = 0.1)
+
+x = torch.randn(32, 1)
+y = 2 * x + 1
+
+pred = model(x)
+loss = F.mse_loss(pred, y)
+
+optimizer.zero_grad()
+loss.backward()
+optimizer.step()
+
+print('Mini-batch loss:', loss.item())
+```
+
+Here, `x` and `y` are a mini-batch. `loss.backward()` computes gradients on the current mini-batch and stores them in each parameter's `.grad` attribute; `optimizer.step()` updates the parameters according to those gradients.
+
+In other words, these three PyTorch lines
+
+```python
+optimizer.zero_grad()
+loss.backward()
+optimizer.step()
+```
+
+correspond to
+
+```math
+\theta_{t+1} = \theta_t - \eta \nabla_\theta L_{\mathcal{B}}(\theta_t)
+```
+
+## 4.1.6 Why Shuffle the Data During Training?
+
+If each update uses a mini-batch, another question remains: how should these mini-batches be selected?
+
+The usual practice is to shuffle the training data at the beginning of each epoch and then split it sequentially into mini-batches. This prevents the model from always seeing data in a fixed order.
+
+Without shuffling, mini-batches may carry strong bias. For example, in a classification dataset, the first part might contain only cats and the later part only dogs. If the data is not shuffled, the model sees only cats in the early steps and only dogs in the later steps, which makes the gradient direction unstable. Shuffling aims to make each mini-batch resemble a small random sample of the full training set. The mini-batch gradient still contains noise, but it is less likely to stay biased toward one class for a long stretch of training.
+
+This is why PyTorch `DataLoader` objects usually set `shuffle=True` for training data:
+
+```python
+dataloader = torch.utils.data.DataLoader(
+    dataset,
+    batch_size = 32,
+    shuffle = True,
+)
+```
+
+Validation and test sets usually do not need `shuffle=True`. During validation and testing, parameters are not updated, and we only need a stable estimate of model performance. The data order does not affect the final average metric.
+
+## 4.1.7 Weight Decay in SGD
+
+So far, SGD has focused on one goal: reducing the training loss. That is, parameter updates are determined entirely by the gradient on the current mini-batch:
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+where $g_t = \nabla_\theta L_{\mathcal{B}}(\theta_t)$. When training neural networks, however, we usually want the model to perform well not only on the training set, but also on unseen data. To improve generalization, we often use regularization to constrain model complexity.
+
+A common method adds a penalty term to the loss, encouraging the model to use smaller weights:
+
+```math
+L_{\text{reg}}(\theta) = L(\theta) + \frac{\lambda}{2}\|\theta\|_2^2
+```
+
+Here, $\lambda$ is the regularization strength. It controls how strongly we prefer smaller parameters. The term $\|\theta\|_2^2$ is the sum of squared parameters. A larger value means the parameters are larger overall. After adding this term, the optimizer must reduce the original training loss while also avoiding unnecessarily large parameters.
+
+This is usually called **L2 regularization**. In SGD, it is also often called **weight decay**.
+
+The name comes from its effect on the update rule. Since
+
+```math
+\nabla_\theta \frac{\lambda}{2}\|\theta\|_2^2 = \lambda \theta
+```
+
+the gradient after adding the L2 term becomes
+
+```math
+g_t + \lambda \theta_t
+```
+
+The SGD update rule becomes
+
+```math
+\theta_{t+1} = \theta_t - \eta (g_t + \lambda \theta_t)
+```
+
+Expanding it gives
+
+```math
+\theta_{t+1} = (1 - \eta \lambda)\theta_t - \eta g_t
+```
+
+This step is important. In addition to the normal gradient update $-\eta g_t$, the parameter itself is multiplied by a coefficient smaller than 1, namely $(1 - \eta\lambda)$. Each update therefore slightly decays the weights toward 0, which is why the method is called weight decay.
+
+Plain SGD asks:
+
+> **How should the parameters move to reduce the current batch loss?**
+
+SGD with weight decay adds another constraint:
+
+> **Can the parameters reduce the loss while avoiding unnecessarily large weights?**
+
+Weight decay can therefore be viewed as a way to constrain model complexity. It does not reduce the number of model parameters. Instead, it makes the model prefer smaller weight values.
+
+In basic SGD, implementing weight decay is straightforward. Before updating the parameters, add $\lambda \theta$ to the gradient:
+
+```{python}
+class SimpleSGDWithWeightDecay(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1e-3,
+        weight_decay: float = 0.0,
+    ):
+        """Initialize SGD with coupled L2 weight decay.
+
+        Args:
+            params: Iterable of tensors updated by the optimizer.
+            lr: Learning rate used for each update.
+            weight_decay: L2 regularization strength.
+        """
+        super().__init__(params)
+        self.lr = lr
+        self.weight_decay = weight_decay
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        """Update parameters with gradient and weight decay terms."""
+        for p in self.params:
+            if p.grad is None:
+                continue
+
+            grad = p.grad
+            if self.weight_decay > 0:
+                grad = grad.add(p, alpha = self.weight_decay)
+
+            p.sub_(grad, alpha = self.lr)
+```
+
+Here, `weight_decay` does not subtract a fixed value directly from the parameter. It decays the parameter proportionally to its current value. A larger parameter gets a larger decay term; a parameter near 0 gets a smaller one.
+
+We can inspect its effect with the same simple quadratic function:
+
+```{python}
+theta1 = torch.tensor([-5.0, 2.0], requires_grad = True)
+theta2 = torch.tensor([-5.0, 2.0], requires_grad = True)
+optimizer1 = SimpleSGD([theta1], lr = 0.4)
+optimizer2 = SimpleSGDWithWeightDecay([theta2], lr = 0.4, weight_decay = 0.2)
+
+history_no_decay = dopt.run_optimizer(optimizer1, loss_fn, steps = 40)
+history_with_decay = dopt.run_optimizer(optimizer2, loss_fn, steps = 40)
+
+print('Without weight decay:')
+print('Final theta:', history_no_decay[-1])
+print('Final loss:', loss_fn(history_no_decay[-1]).item())
+
+print('With weight decay:')
+print('Final theta:', history_with_decay[-1])
+print('Final loss:', loss_fn(history_with_decay[-1]).item())
+```
+
+Plot the parameter trajectories:
+
+```{python}
+fig = plt.figure(2)
+ax = fig.add_subplot(1, 1, 1)
+h1 = ax.plot(history_no_decay, color = 'royalblue')
+h2 = ax.plot(history_with_decay, color = 'coral')
+h3 = ax.axhline(2, linestyle = '--', color = 'gray', linewidth = 1, zorder = 0)
+h4 = ax.axhline(-1, linestyle = '--', color = 'gray', linewidth = 1, zorder = 0)
+ax.set_xlabel('Step')
+ax.set_ylabel(r'$\theta$')
+labels = ['Without weight decay', 'With weight decay', 'Optimal point']
+ax.legend([h1[0], h2[0], h3], labels)
+ax.set_title('SGD with Weight Decay')
+plt.show()
+```
+
+Without weight decay, the parameters gradually approach the original optimum $(2, -1)$. With weight decay, the parameters feel an additional pull toward 0, so $x$ stops at a value smaller than 2 and $y$ stops at a value larger than -1. This is not an optimizer bug. The optimization objective has changed. After adding weight decay, the optimizer no longer minimizes only
+
+```math
+L(\theta) = 0.1 (x - 2)^2 + 2.0 (y + 1)^2
+```
+
+but instead minimizes
+
+```math
+L(\theta) = 0.1 (x - 2)^2 + 2.0 (y + 1)^2 + \frac{\lambda}{2}(x^2 + y^2)
+```
+
+The new optimum therefore lies between the original optimum and 0.
+
+PyTorch `optim.SGD` also provides a `weight_decay` argument:
+
+```{python}
+model = nn.Linear(1, 1)
+optimizer = optim.SGD(
+    model.parameters(),
+    lr = 0.1,
+    weight_decay = 1e-4,
+)
+```
+
+In practice, we usually do not apply weight decay to every parameter. For example, the bias of a `Linear` layer and the scale and shift parameters of `LayerNorm` are often excluded from weight decay, because they are not ordinary linear or convolutional weights, and decaying them is not always helpful. In real projects, parameter groups are often used to assign different `weight_decay` values to different parameters. This was mentioned earlier in the chapter on PyTorch optimizers.
+
+## 4.1.8 Strengths and Limitations of SGD
+
+At this point, we can summarize why SGD matters.
+
+First, SGD makes large-scale training feasible. The model does not need to scan the entire training set for every update. It can approximate the full gradient with a mini-batch gradient, greatly reducing the cost of each step.
+
+Second, the SGD update rule is simple:
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+where $g_t$ is the gradient on the current mini-batch. Because SGD is simple, it also makes later optimizer improvements easier to understand. Momentum changes the update direction by adding inertia; Adagrad, RMSprop, and Adam change the effective learning rate for different parameters; AdamW revisits the relationship between weight decay and gradient updates.
+
+SGD also has clear limitations.
+
+The first limitation is noisy update directions. A mini-batch gradient is only an estimate of the full gradient, and different batches can produce very different directions, so the parameter trajectory can be noisy.
+
+The second limitation is that all parameters share the same learning rate. Whether one parameter often has large gradients or another has consistently small gradients, basic SGD uses the same $\eta$ for both. This can be too rigid for complex neural networks.
+
+The third limitation is that SGD does not remember past gradients. Each update only uses the current mini-batch gradient; previous update directions do not directly affect the current one. This can cause parameters to oscillate in some directions, especially when the loss surface is long and narrow.
+
+These are exactly the problems later optimizers address.
+
+- Momentum asks: if the current gradient is noisy, can we use recent update directions as a reference?
+- Adagrad and RMSprop ask: if different parameters have different gradient scales, can each parameter get its own effective learning rate?
+- Adam asks: can we combine momentum-style direction smoothing with RMSprop-style adaptive scaling?
+
+SGD is therefore not only a basic optimizer. It is also the starting point for understanding the optimizers that follow.
+
+## 4.1.9 Summary
+
+This section started from the basic question: once we have gradients, how should parameters be updated?
+
+The gradient points in the direction where the loss increases fastest, so the negative gradient gives the local direction of fastest decrease. Gradient descent updates parameters along the negative gradient and uses the learning rate to control the step size.
+
+For a full training set, batch gradient descent computes the gradient using all examples at each update. The direction is stable, but the computational cost is high. Stochastic gradient descent uses a random sample or mini-batch to approximate the full gradient, substantially reducing the cost per update while introducing moderate stochasticity.
+
+Modern deep learning usually uses mini-batch SGD. It trades off computational efficiency and gradient stability and forms the basic pattern of neural network training. In PyTorch, the familiar `zero_grad()`, `backward()`, and `step()` sequence computes gradients on a mini-batch and updates parameters.
+
+This section also introduced weight decay in SGD. It can be interpreted as adding an L2 regularization term to the loss, encouraging parameters to remain small while reducing the training loss. For basic SGD, L2 regularization and weight decay are equivalent. For adaptive optimizers such as Adam, they differ, so the AdamW section will return to this issue.
+
+Basic SGD still has limitations: its update direction is sensitive to mini-batch noise, all parameters share one learning rate, and it does not remember previous gradient directions. The next section will show how momentum makes the first important modification to SGD based on these problems.
