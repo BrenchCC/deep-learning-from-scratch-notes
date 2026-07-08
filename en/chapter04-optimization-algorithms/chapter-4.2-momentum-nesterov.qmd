@@ -1,0 +1,454 @@
+---
+author: Brench
+date: 2026-07-08
+date-modified: 2026-07-08
+open-graph:
+  title: chapter4.2-momentum-nesterov
+  description: "4.2 Momentum and Nesterov Momentum"
+title: "Chapter 4.2 Momentum and Nesterov Momentum"
+order: 2
+---
+
+
+The previous section moved from gradient descent to mini-batch SGD. The SGD update rule is simple:
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+Here, $g_t$ is the gradient on the current mini-batch.
+
+The intuition behind this formula is clear: the current gradient points in the direction where the loss increases fastest, so we take one step in the negative gradient direction. But SGD has an obvious limitation:
+
+> **Each step only trusts the gradient of the current mini-batch.**
+
+If the current mini-batch gives an accurate gradient direction, the update is smooth. If the mini-batch contains noise, the update direction jitters. Loss surfaces in deep learning are also usually complex: some directions are steep, while others are flat. SGD may oscillate in steep directions and move slowly in flatter directions.
+
+This section introduces **Momentum** [@Ilya2013Momentum], which addresses this problem with a natural idea:
+
+> **Do not only use the current gradient. Also use the update direction from recent history.**
+
+```{python}
+from collections.abc import Iterable
+from pprint import pprint
+from typing import override
+
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch import Tensor
+
+plt.rc('figure', dpi = 100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.2.1 Why Does SGD Oscillate?
+
+To understand momentum, start with a case where SGD behaves poorly.
+
+Consider a two-dimensional parameter:
+
+```math
+\theta = (x, y)
+```
+
+Suppose the loss surface has the shape of a long narrow valley. Along the $x$ direction, the loss changes slowly; along the $y$ direction, the loss changes quickly. This kind of surface is common in neural network training.
+
+If we update the parameters with SGD, the negative gradient direction does not necessarily point along the bottom of the valley. Because some directions are steep, the gradient may point mostly toward the valley walls, so the parameters move back and forth across the valley. At the same time, progress along the direction that actually matters is slow. The picture is similar to walking downhill in a narrow valley while deciding each step only from the local slope. Since the two sides are steep, the path repeatedly swings from one side to the other. It still descends overall, but the route is inefficient.
+
+We can simulate this behavior with a simple quadratic function:
+
+```math
+L(\theta) = 0.1(x - 2)^2 + 2.0(y + 1)^2
+```
+
+The $y$ direction is steeper, and the $x$ direction is flatter. The minimum is at $(2, -1)$.
+
+First define the loss function:
+
+```{python}
+def loss_fn(theta: Tensor) -> Tensor:
+    """Compute a two-dimensional quadratic loss.
+
+    Args:
+        theta: Tensor containing ``x`` and ``y`` parameters.
+
+    Returns:
+        Scalar quadratic loss value.
+    """
+    x, y = theta[0], theta[1]
+    return 0.1 * (x - 2) ** 2 + 2.0 * (y + 1) ** 2
+```
+
+Run SGD and plot the update trajectory:
+
+```{python}
+theta = torch.tensor([-5.0, 2.0], requires_grad = True)
+optimizer = dopt.SGD([theta], lr = 0.4)
+history = dopt.run_optimizer(optimizer, loss_fn, steps = 40)
+
+x = torch.linspace(-6.5, 5.5, 200)
+y = torch.linspace(-3.5, 2.5, 200)
+X, Y = torch.meshgrid(x, y, indexing = 'ij')
+Z = 0.1 * (X - 2) ** 2 + 2.0 * (Y + 1) ** 2
+
+fig = plt.figure(1)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels = 25, cmap = 'YlGnBu')
+ax.plot(
+    history[:, 0],
+    history[:, 1],
+    color = '#EC705B',
+    marker = 'o',
+    markersize = 3,
+    markerfacecolor = '#C0392B',
+    markeredgecolor = 'white',
+    markeredgewidth = 0.5,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.set_title('SGD on a Narrow Valley')
+plt.show()
+```
+
+The plot shows that the parameters do not move smoothly toward the minimum. They swing across the steep sides of the valley. This oscillation wastes many update steps. In fact, if the learning rate is changed to 0.5 in this example, the optimization may not converge.
+
+This raises two questions. If gradients point roughly in the same direction over many steps, can we make the parameters move faster in that direction? If gradients repeatedly flip sign in one direction, can we cancel part of that oscillation?
+
+Momentum does exactly this.
+
+## 4.2.2 Momentum: Giving Updates Inertia
+
+The core idea of momentum is simple:
+
+> **The current update direction is determined not only by the current gradient, but also by previous update directions.**
+
+In plain SGD, the update direction at each step is $-g_t$. Momentum maintains an additional variable $v_t$, which can be interpreted as the "velocity" or "momentum" of the parameter update. At each step, it first updates this momentum:
+
+```math
+v_t = \beta v_{t-1} + g_t
+```
+
+Then it uses the momentum to update the parameters:
+
+```math
+\theta_{t+1} = \theta_t - \eta v_t
+```
+
+Here, $\beta$ is usually called the momentum coefficient. A common value is 0.9.
+
+The formula has the following interpretation:
+
+- $g_t$ is the current gradient;
+- $v_{t-1}$ is the accumulated direction from previous gradients;
+- $\beta$ controls how much of the previous direction is preserved.
+
+If gradients point in similar directions across many consecutive steps, they accumulate and $v_t$ becomes larger, so the parameters move faster in that direction. If the gradient in one direction is positive at one step and negative at another, those gradients cancel each other, so $v_t$ does not accumulate much in that direction and the oscillation weakens.
+
+Momentum therefore does two things:
+
+1. It accelerates directions that remain consistent;
+2. It smooths directions that oscillate.
+
+This is why momentum is often explained as inertia. Plain SGD chooses a new direction at every step. Momentum behaves more like a moving object with velocity: it does not immediately make a sharp turn just because the current gradient changes slightly. It preserves part of the previous motion.
+
+## 4.2.3 Momentum as an Exponentially Weighted Sum
+
+The update above is
+
+```math
+v_t = \beta v_{t-1} + g_t
+```
+
+Expanding it shows that $v_t$ contains gradients from many previous steps:
+
+```math
+v_t = g_t + \beta g_{t-1} + \beta^2 g_{t-2} + \beta^3 g_{t-3} + \cdots
+```
+
+In other words, momentum does not only use the current gradient. It uses a weighted sum of previous gradients. Recent gradients receive larger weights, and older gradients receive smaller weights.
+
+This matches the usual training intuition:
+
+- The current mini-batch gradient matters;
+- Gradients from the most recent steps are also useful;
+- Gradients from much earlier steps should gradually fade out.
+
+Momentum can therefore be viewed as smoothing the gradient direction. It turns a noisy one-step gradient into a more stable accumulated direction. In a narrow valley, this helps the parameters move more smoothly along the valley floor instead of repeatedly swinging across it.
+
+If gradients remain approximately constant for a period of time, and each step has the same gradient vector $g$, the formula becomes a geometric series:
+
+```math
+v_t \approx g \times (1 + \beta + \beta^2 + \cdots)
+= g \times \frac{1}{1-\beta},
+\quad \beta \in [0,1)
+```
+
+This means that when gradients keep pointing in the same direction, momentum can make the update velocity roughly $\frac{1}{1 - \beta}$ times that of plain SGD. For $\beta=0.9$, this factor is 10. For this reason, the learning rate is usually reduced when momentum is used.
+
+Some materials write momentum in another form:
+
+```math
+\begin{aligned}
+v_t &= \beta v_{t-1} + \eta g_t \\
+\theta_{t+1} &= \theta_t - v_t
+\end{aligned}
+```
+
+This differs slightly from the earlier form. In the first form, $v_t$ accumulates gradients, and the learning rate $\eta$ is multiplied only when updating the parameters. In the second form, the gradient is multiplied by the learning rate before being accumulated into $v_t$, so $v_t$ itself represents the parameter update step. If the learning rate $\eta$ stays constant during training and $v_0 = 0$, the two forms differ only by a constant scaling and produce equivalent parameter updates. PyTorch uses the first form.
+
+Regardless of the notation, the core idea is the same:
+
+> **Momentum accumulates previous gradient directions and updates parameters with a smoother direction that has inertia.**
+
+## 4.2.4 Comparing the Trajectories of Momentum and SGD
+
+We can implement momentum on the narrow-valley example and compare it with plain SGD.
+
+First implement a minimal `SimpleSGDWithMomentum` optimizer:
+
+```{python}
+class SimpleSGDWithMomentum(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1e-3,
+        momentum: float = 0.0,
+    ):
+        """Initialize a minimal SGD optimizer with momentum.
+
+        Args:
+            params: Iterable of tensors updated by the optimizer.
+            lr: Learning rate used for each update.
+            momentum: Coefficient used to preserve previous gradient direction.
+        """
+        super().__init__(params)
+        self.lr = lr
+        self.momentum = momentum
+        self.velocity = [torch.zeros_like(p) for p in self.params]
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        """Update parameters with their current gradients and momentum state."""
+        for p, v in zip(self.params, self.velocity, strict = True):
+            if p.grad is None:
+                continue
+
+            v.mul_(self.momentum).add_(p.grad)
+            p.sub_(v, alpha = self.lr)
+```
+
+Then compare the trajectories of plain SGD and momentum:
+
+::: {.callout-note}
+When momentum is enabled, the learning rate usually needs to be smaller. With `momentum=0.9`, the learning rate is often set about one order of magnitude smaller than that of plain SGD. In this example, SGD with momentum uses a learning rate of 0.04, while plain SGD uses 0.4.
+:::
+
+```{python}
+theta1 = torch.tensor([-5.0, 2.0], requires_grad = True)
+theta2 = torch.tensor([-5.0, 2.0], requires_grad = True)
+optimizer1 = dopt.SGD([theta1], lr = 0.4)
+optimizer2 = SimpleSGDWithMomentum([theta2], lr = 0.04, momentum = 0.9)
+
+sgd_history = dopt.run_optimizer(optimizer1, loss_fn, steps = 40)
+momentum_history = dopt.run_optimizer(optimizer2, loss_fn, steps = 40)
+
+fig = plt.figure(2)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels = 25, cmap = 'YlGnBu')
+ax.plot(
+    sgd_history[:, 0],
+    sgd_history[:, 1],
+    color = '#EC705B',
+    marker = 'o',
+    markersize = 3,
+    markerfacecolor = '#C0392B',
+    markeredgecolor = 'white',
+    markeredgewidth = 0.5,
+)
+ax.plot(
+    momentum_history[:, 0],
+    momentum_history[:, 1],
+    color = '#4B96EB',
+    marker = 'o',
+    markersize = 3,
+    markerfacecolor = '#2A74C8',
+    markeredgecolor = 'white',
+    markeredgewidth = 0.5,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.legend(['SGD', 'Momentum'])
+ax.set_title('SGD vs Momentum Trajectory')
+plt.show()
+```
+
+The momentum trajectory is usually more continuous. It is not determined only by the current gradient, but keeps moving with the previous direction. This does not mean momentum is always more stable. If the learning rate is too large, or if $\beta$ is too close to 1, the inertia may be too strong and the parameters may overshoot the minimum with even larger oscillations. Momentum does not remove learning-rate tuning; it changes how the update direction is formed.
+
+## 4.2.5 Momentum in PyTorch
+
+In PyTorch, `optim.SGD` already supports momentum. It only requires setting the `momentum` argument:
+
+```{python}
+model = nn.Linear(6, 1)
+optimizer = optim.SGD(
+    model.parameters(),
+    lr = 0.1,
+    momentum = 0.9,
+)
+```
+
+The optimizer is still called `SGD`, but it is no longer the most basic form of SGD. It maintains a momentum buffer for each parameter, which is the momentum variable described above.
+
+The training loop itself is unchanged:
+
+```{python}
+x = torch.randn(32, 6)
+y = torch.randn(32, 1)
+
+pred = model(x)
+loss = F.mse_loss(pred, y)
+
+optimizer.zero_grad()
+loss.backward()
+optimizer.step()
+
+print('Loss:', loss.item())
+```
+
+The momentum update happens inside `optimizer.step()`. From the user's perspective, the interface remains the same: clear gradients, run backpropagation, and update parameters.
+
+To inspect the state maintained by the optimizer, we can look at `state_dict()`. After calling `step()` once, PyTorch creates a momentum buffer for each parameter:
+
+```{python}
+state = optimizer.state_dict()['state']
+pprint(state)
+```
+
+This illustrates an important difference between momentum and plain SGD:
+
+> **A momentum optimizer has state.**
+
+Plain SGD only needs the current parameters and the current gradients. Momentum also needs to remember the accumulated velocity. Therefore, when saving a model checkpoint, the optimizer state should be saved together with the model parameters. Otherwise, after resuming training, the momentum buffer is lost and the training trajectory changes.
+
+## 4.2.6 Nesterov Momentum: Looking One Step Ahead
+
+Momentum lets the parameters move forward with inertia. This also creates a problem: if the inertia is too strong, the parameters may overshoot. If the optimizer only realizes that the loss surface ahead becomes steep after overshooting, several update steps may already have been wasted. A natural question is whether we can sense the change ahead earlier and adjust the velocity.
+
+This is the idea behind **Nesterov Momentum** [@Ilya2013Momentum]:
+
+> **Since we are likely to move along the inertia direction, estimate the gradient at a "lookahead" position first.**
+
+Plain momentum asks: standing at $\theta_t$, what is the gradient here? Nesterov momentum asks: given the current inertia, the parameters are about to move to a point ahead. What is the gradient at that point?
+
+This allows Nesterov momentum to sense changes in the loss surface earlier. If the surface ahead becomes steeper, or if the direction needs correction, it can adjust the velocity before the parameters actually overshoot.
+
+A common form is
+
+```math
+\begin{aligned}
+\tilde{\theta}_t &= \theta_t - \eta \beta v_{t-1} \\
+g_t &= \nabla_\theta L(\tilde{\theta}_t) \\
+v_t &= \beta v_{t-1} + g_t \\
+\theta_{t+1} &= \theta_t - \eta v_t
+\end{aligned}
+```
+
+Here, $\tilde{\theta}_t$ is the lookahead position. We first estimate where the parameters may arrive based on the previous momentum direction, compute the gradient $g_t$ at that position, and then use it to update both momentum and parameters.
+
+In deep learning frameworks, however, Nesterov momentum usually does not literally move the parameters to $\tilde{\theta}_t$ and then run another forward and backward pass. In the PyTorch training flow, gradients are computed when `loss.backward()` is called, while `optimizer.step()` happens after backpropagation. When the optimizer starts updating parameters, `p.grad` already exists, and it is usually the gradient computed at the current parameters $\theta_t$.
+
+PyTorch therefore uses a form of Nesterov momentum that is easier to implement in this framework. It first updates the momentum as in plain momentum:
+
+```math
+v_t = \beta v_{t-1} + g_t
+```
+
+Then, instead of directly using $v_t$ to update the parameters, it uses the following corrected direction:
+
+```math
+\beta v_t + g_t
+```
+
+This adds a correction term $\beta v_t$ to the current gradient. The correction can be interpreted as an anticipatory adjustment for the next inertia direction. Since $v_t$ is the momentum accumulated up to the current step, $\beta v_t$ represents the inertial direction that will affect the next update.
+
+The parameter update can be written as
+
+```math
+\theta_{t+1} = \theta_t - \eta (\beta v_t + g_t)
+```
+
+Compare this with plain momentum:
+
+```math
+\theta_{t+1} = \theta_t - \eta v_t
+```
+
+This is how the lookahead idea appears in the implementation.
+
+In code, plain momentum is often written as
+
+```python
+v.mul_(self.momentum).add_(p.grad)
+p.sub_(self.lr * v)
+```
+
+A PyTorch-style Nesterov momentum update can be written as
+
+```python
+v.mul_(self.momentum).add_(p.grad)
+p.sub_(self.lr * (self.momentum * v + p.grad))
+```
+
+The explicit lookahead version emphasizes moving to $\tilde{\theta}_t$ first and computing the gradient there. The PyTorch-style implementation instead constructs a Nesterov-corrected update direction from an already available gradient. This fits the standard training flow better.
+
+Enabling Nesterov momentum in PyTorch is straightforward:
+
+```{python}
+optimizer = optim.SGD(
+    model.parameters(),
+    lr = 0.1,
+    momentum = 0.9,
+    nesterov = True,
+)
+```
+
+PyTorch requires `momentum` to be positive and `dampening` to be 0 when Nesterov momentum is used. For a first pass, the important point is simply that `nesterov=True` enables a Nesterov-style momentum correction.
+
+## 4.2.7 Effects and Limitations of Momentum
+
+Momentum is an important improvement over SGD. It does not change the basic idea of descending along gradients, but it changes the direction used at each step: the optimizer no longer only uses the current gradient, and instead incorporates previous gradient directions.
+
+Its main effects are:
+
+1. **Reducing oscillation**: if the gradient repeatedly changes sign in one direction, momentum lets the positive and negative directions cancel each other, weakening the oscillation.
+2. **Accelerating consistent directions**: if gradients point in similar directions across many steps, momentum accumulates that direction and makes parameter updates faster.
+3. **Introducing optimizer state**: because momentum maintains a velocity variable, the optimizer is no longer a stateless update rule.
+
+Momentum still has an important limitation:
+
+> **All parameters still share the same global learning rate.**
+
+Momentum can smooth and accumulate directions, but it does not decide that one parameter should use a larger learning rate while another should use a smaller one. In complex models, gradient scales can differ greatly across parameters. Some parameters frequently receive large gradients, while others have small gradients for a long time. If all parameters use the same learning rate, training may still be inflexible.
+
+This leads to the next family of optimizers: adaptive learning-rate methods. Starting from Adagrad, these optimizers ask a different question: if different parameters have different gradient histories, can we adjust the learning rate separately for each parameter?
+
+That is the topic of the next section.
+
+## 4.2.8 Summary
+
+This section started from a limitation of SGD and introduced momentum.
+
+Plain SGD only uses the current mini-batch gradient at each step, so its update direction is sensitive to noise. On a narrow loss surface, SGD may oscillate in steep directions while moving slowly in the direction that actually matters.
+
+The core idea of momentum is to give parameter updates inertia. It maintains a velocity variable that accumulates previous gradient directions. As a result, parameters accelerate in directions where gradients remain consistent, while oscillations are partially canceled in directions where gradients repeatedly change.
+
+Nesterov momentum goes one step further: since parameters will move along the inertia direction, estimate the gradient at a position ahead and use it to sense direction changes earlier. It can be viewed as a lookahead correction to ordinary momentum.
+
+Momentum and Nesterov momentum still use a global learning rate. They address noisy update directions and the lack of inertia, but they do not solve the problem of whether different parameters should use different learning rates. The next section will show how Adagrad starts from exactly this question and introduces adaptive learning rates for individual parameters.
