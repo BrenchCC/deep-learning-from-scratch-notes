@@ -1,0 +1,418 @@
+---
+author: Brench
+date: 2026-07-11
+date-modified: 2026-07-11
+open-graph:
+  title: chapter4.3-adagrad
+  description: "4.3 Adagrad：自适应学习率的起点"
+title: "Chapter 4.3 Adagrad：自适应学习率的起点"
+order: 3
+---
+
+前两节我们从梯度下降讲到 SGD，又进一步引入了 momentum。
+
+SGD 的基本更新规则是：
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+Momentum 在这个基础上加入了过去梯度方向的累计：
+
+```math
+\begin{aligned}
+v_t &= \beta v_{t-1} + g_t \\
+\theta_{t+1} &= \theta_t - \eta v_t
+\end{aligned}
+```
+
+Momentum 处理的是更新方向：当前 mini-batch 的梯度带有噪声，因此更新还会参考近期梯度的累计趋势。这样可以在方向一致时加速，在梯度反复变号的方向上减弱震荡。
+
+但是这里还有另一个问题没有解决：
+
+> **所有参数仍然共享同一个学习率。**
+
+在基础 SGD 和 momentum 中，学习率 $\eta$ 是一个全局标量。无论某个参数的梯度经常很大，还是另一个参数的梯度长期很小，它们都使用同一个学习率。
+
+在神经网络中，不同参数的梯度尺度可能相差很大。有些参数几乎每一步都会得到较大梯度，有些参数只在少数 batch 中获得非零梯度。全局学习率很难同时适配这两类参数：
+
+- 学习率设得太大，梯度大的参数可能更新过猛；
+- 学习率设得太小，梯度小或者稀疏更新的参数又学得太慢。
+
+Adagrad [@Duchi2011Adagrad] 从参数的历史梯度出发处理这个问题：
+
+> **不要让所有参数共享同一个学习率，而是根据每个参数过去的梯度大小，为每个参数自动调整有效学习率。**
+
+```{python}
+from collections.abc import Iterable
+from typing import override
+
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch import Tensor
+
+plt.rc('figure', dpi = 100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.3.1 全局学习率的局限
+
+先考虑一个二维参数：
+
+```math
+\theta = (\theta_1, \theta_2)
+```
+
+假设在训练过程中，$\theta_1$ 的梯度经常很大，而 $\theta_2$ 的梯度经常很小。如果我们使用普通 SGD：
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+那么两个参数使用的是同一个学习率 $\eta$。
+
+对于 $\theta_1$ 来说，因为梯度本来就大，再乘上同一个学习率，更新量可能太大，容易震荡。而对于 $\theta_2$ 来说，因为梯度本来就小，再乘上同一个学习率，更新量可能太小，学习很慢。这说明问题不一定出在梯度方向本身，而是出在不同参数的梯度尺度不一样。一个全局学习率很难同时照顾所有参数。
+
+更典型的例子来自稀疏特征。
+
+假设我们在训练一个带有词向量的模型。常见词出现得很频繁，对应的 embedding 会被频繁更新；罕见词出现得很少，对应的 embedding 只有在少数 batch 中才会被更新。如果所有 embedding 参数都使用同一个学习率，那么常见词的参数会被更新很多次，而罕见词的参数可能很久才动一次。
+
+因此，更合适的更新策略是：
+
+- 经常被更新的参数，后面走得更谨慎一些；
+- 很少被更新的参数，出现时可以走得相对大一些。
+
+Adagrad 据此为不同参数构造不同的有效学习率。
+
+## 4.3.2 Adagrad 的核心想法
+
+Adagrad 的全称是 **Adaptive Gradient Algorithm** [@Duchi2011Adagrad]。它的核心是为每个参数维护一个历史梯度平方和。
+
+假设第 $t$ 步的梯度是：
+
+```math
+g_t = \nabla_\theta L_t(\theta_t)
+```
+
+Adagrad 会维护一个和参数形状相同的变量 $s_t$：
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+这里的平方是逐元素平方。如果 $\theta$ 是一个向量，那么 $g_t^2$ 也是逐元素平方。
+
+然后 Adagrad 用 $s_t$ 来缩放当前梯度：
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{s_t}+\epsilon}
+```
+
+其中，$\epsilon$ 是一个很小的常数，用来避免分母为 0。
+
+如果某个参数过去经常出现较大梯度，对应的 $s_t$ 会快速增长，分母增大后，其有效更新步长随之减小。另一个参数若很少被更新，或者梯度始终较小，对应的 $s_t$ 增长较慢，因此保留相对较大的有效学习率。
+
+也就是说，Adagrad 不再给所有参数使用同一个有效学习率，而是给每个参数一个自己的缩放因子：
+
+```math
+\frac{\eta}{\sqrt{s_t}+\epsilon}
+```
+
+Adagrad 的参数级缩放可以概括为：
+
+> **根据每个参数过去累计的梯度大小，自动降低那些经常被大幅更新的参数的学习率。**
+
+## 4.3.3 从有效学习率看 Adagrad
+
+将更新公式拆开，可以直接看出 Adagrad 如何改变有效学习率。
+
+SGD 的更新可以写成：
+
+```math
+\Delta \theta_t = - \eta g_t
+```
+
+Adagrad 的更新可以写成：
+
+```math
+\Delta \theta_t = - \frac{\eta}{\sqrt{s_t}+\epsilon} g_t
+```
+
+这里：
+
+```math
+\eta_t = \frac{\eta}{\sqrt{s_t}+\epsilon}
+```
+
+可以看成每个参数在第 $t$ 步的**有效学习率**。
+
+由于 $s_t$ 是历史梯度平方的累计和：
+
+```math
+s_t = \sum_{i=1}^{t} g_i^2
+```
+
+所以 $s_t$ 单调不减。只要对应参数继续获得非零梯度，有效学习率 $\eta_t$ 就会下降；梯度为零时，累计量和有效学习率保持不变。
+
+由此得到 Adagrad 的三个直接性质：
+
+- 它会自动降低频繁更新参数的学习率；
+- 它可以让稀疏参数在出现时保留相对较大的更新；
+- 但是训练越久，所有参数的有效学习率都会逐渐下降。
+
+前两个特点是优点，最后一个特点则会成为它的主要问题。
+
+在训练早期，Adagrad 的自适应缩放很有帮助。它能快速抑制那些梯度很大的方向，让训练更稳定。但在训练后期，如果 $s_t$ 已经累积得很大，那么分母会变得很大，有效学习率可能变得非常小。参数几乎不再移动，训练可能过早停下来。
+
+RMSprop 和 Adadelta 后续修改的正是这一点：保留参数级自适应缩放，但不再让所有历史梯度的平方无限累积，以免训练后期过于保守。
+
+## 4.3.4 Adagrad 与 SGD 的轨迹对比
+
+我们先用一个简单的二维函数来观察 Adagrad 的行为：
+
+```math
+L(x, y) = 0.1 (x - 2)^2 + 2.0 (y + 1)^2
+```
+
+这个函数在 $y$ 方向更陡，在 $x$ 方向更平缓。普通 SGD 在这种狭长损失曲面上，可能需要比较小的学习率才能稳定。如果学习率稍大，陡峭方向容易震荡。
+
+Adagrad 会根据每个方向过去的梯度大小调整步长。由于 $y$ 方向梯度经常较大，所以它的有效学习率会更快变小。$x$ 方向梯度较小，所以它会保留相对更大的有效学习率。
+
+先定义损失函数：
+
+```{python}
+def loss_fn(theta: Tensor) -> Tensor:
+    """Compute a two-dimensional quadratic loss.
+
+    Args:
+        theta: Tensor containing the two optimization parameters.
+
+    Returns:
+        Scalar quadratic loss value.
+    """
+    x, y = theta[0], theta[1]
+    return 0.1 * (x - 2) ** 2 + 2.0 * (y + 1) ** 2
+```
+
+然后实现 Adagrad：
+
+```{python}
+class Adagrad(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1e-2,
+        lr_decay: float = 0.0,
+        weight_decay: float = 0.0,
+        initial_accumulator_value: float = 0.0,
+        eps: float = 1e-10,
+    ):
+        """Initialize the Adagrad optimizer.
+
+        Args:
+            params: Iterable of tensors to optimize.
+            lr: Base learning rate.
+            lr_decay: Learning-rate decay applied per step.
+            weight_decay: L2 penalty coefficient.
+            initial_accumulator_value: Initial value of each squared-gradient sum.
+            eps: Constant added to the denominator for numerical stability.
+        """
+        super().__init__(params)
+        self.lr = lr
+        self.lr_decay = lr_decay
+        self.weight_decay = weight_decay
+        self.initial_accumulator_value = initial_accumulator_value
+        self.eps = eps
+
+        self.step_count = 0
+        self.sum_of_sq_grads = [
+            torch.full_like(p, initial_accumulator_value) for p in self.params
+        ]
+        self.effective_lrs = []
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        """Apply one Adagrad update to all parameters with gradients."""
+        self.step_count += 1
+        clr = self.lr / (1 + (self.step_count - 1) * self.lr_decay)
+
+        for p, s in zip(self.params, self.sum_of_sq_grads, strict=True):
+            if p.grad is None:
+                continue
+
+            grad = p.grad
+            if self.weight_decay > 0:
+                grad = grad.add(p, alpha=self.weight_decay)
+
+            s.add_(grad.square())
+            p.sub_(clr / (s.sqrt() + self.eps) * grad)
+
+        self.effective_lrs.append(self.get_effective_lr())
+
+    @torch.no_grad()
+    def get_effective_lr(self) -> list[Tensor]:
+        """Return the current element-wise effective learning rates."""
+        effective_lr = []
+
+        for s in self.sum_of_sq_grads:
+            lr = self.lr / (s.sqrt() + self.eps).clone()
+            effective_lr.append(lr)
+
+        return effective_lr
+```
+
+运行两种优化方法，并画出它们在参数平面上的轨迹：
+
+```{python}
+theta1 = torch.tensor([-5.0, 2.0], requires_grad = True)
+theta2 = torch.tensor([-5.0, 2.0], requires_grad = True)
+optimizer1 = dopt.SGD([theta1], lr = 0.4)
+optimizer2 = Adagrad([theta2], lr = 1.2)
+
+sgd_history = dopt.run_optimizer(optimizer1, loss_fn, steps = 40)
+adagrad_history = dopt.run_optimizer(optimizer2, loss_fn, steps = 40)
+
+x = torch.linspace(-6.5, 5.5, 200)
+y = torch.linspace(-3.5, 2.5, 200)
+X, Y = torch.meshgrid(x, y, indexing = 'ij')
+Z = 0.1 * (X - 2) ** 2 + 2.0 * (Y + 1) ** 2
+
+fig = plt.figure(1)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels = 25, cmap = 'YlGnBu')
+ax.plot(
+    sgd_history[:, 0],
+    sgd_history[:, 1],
+    color='#EC705B',
+    marker='o',
+    markersize=3,
+    markerfacecolor='#C0392B',
+    markeredgecolor='white',
+    markeredgewidth=0.5,
+)
+ax.plot(
+    adagrad_history[:, 0],
+    adagrad_history[:, 1],
+    color='#4B96EB',
+    marker='o',
+    markersize=3,
+    markerfacecolor='#2A74C8',
+    markeredgecolor='white',
+    markeredgewidth=0.5,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.legend(['SGD', 'Adagrad'])
+ax.set_title('SGD vs. Adagrad Trajectory')
+plt.show()
+```
+
+图中 SGD 的轨迹在 $y$ 方向震荡较大，而 Adagrad 更快到达最优点附近。原因是 $y$ 方向的历史梯度较大，Adagrad 会更快降低该方向的有效学习率。训练后期的轨迹也显示了它的局限：累计量持续增大后，更新步长已经很小，参数移动趋于停滞。
+
+## 4.3.5 Adagrad 有效学习率的可视化
+
+理解 Adagrad 的关键在于观察它产生的有效学习率。
+
+我们可以把上面例子中两个参数的有效学习率画出来：
+
+```{python}
+lr_history = torch.stack([lr[0] for lr in optimizer2.effective_lrs])
+steps = torch.arange(1, lr_history.size(0) + 1)
+
+fig = plt.figure(2, figsize = (6, 4))
+ax = fig.add_subplot(1, 1, 1)
+ax.plot(steps, lr_history[:, 0], marker = 'o', markersize = 3)
+ax.plot(steps, lr_history[:, 1], marker = 'o', markersize = 3)
+ax.set_xlabel('Step')
+ax.set_ylabel('Effective learning rate')
+ax.legend([r'$\theta_1$', r'$\theta_2$'])
+ax.set_title('Effective Learning Rates in Adagrad')
+plt.show()
+```
+
+图中两个参数的有效学习率并不相同，因为它们分别维护历史梯度平方和，缩放程度也不同。只要参数继续获得非零梯度，有效学习率便会逐渐下降：
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+只要梯度不是严格为 0，$s_t$ 就会继续增加。分母越大，有效学习率越小。Adagrad 因而不会遗忘早期的大梯度；即使后续梯度尺度已经变化，早期累计量仍会持续压低更新步长。
+
+## 4.3.6 Adagrad 为什么适合稀疏特征？
+
+Adagrad 的参数级缩放尤其适合稀疏特征。
+
+所谓稀疏特征，就是每次训练时只有一小部分参数会被更新。例如在自然语言处理中，如果模型有一个很大的 embedding 表，那么一个 mini-batch 里只会出现其中一小部分 token。只有这些 token 对应的 embedding 会得到梯度，其他 token 的 embedding 梯度为 0。
+
+对于频繁出现的 token，它们的 embedding 会经常被更新。Adagrad 会逐渐增大这些参数对应的 $s_t$，从而降低它们的有效学习率；对于很少出现的 token，它们的 embedding 很少得到非零梯度。对应的 $s_t$ 增长较慢，所以一旦它们出现，仍然可以保留相对较大的有效学习率。
+
+其结果是：
+
+> **频繁出现的参数越学越谨慎，罕见但重要的参数不会因为全局学习率太小而完全学不动。**
+
+因此，在稀疏特征任务中，低频参数不会仅仅因为全局学习率较小而失去有效更新。
+
+不过，对于现代深度神经网络，尤其是需要长时间训练的大模型，Adagrad 的学习率持续衰减问题会比较明显。训练到后期后，$s_t$ 可能已经很大，导致更新步长过小。
+
+因此，Adagrad 适合用来理解参数级自适应学习率，但通常不是长周期深度学习训练的默认优化器。
+
+## 4.3.7 Adagrad 与 SGD、Momentum 的关系
+
+SGD、momentum 和 Adagrad 分别修改了优化过程的不同部分。
+
+SGD 的问题是每一步只看当前梯度，所有参数共享同一个学习率。
+
+Momentum 改进的是第一部分。它不再只看当前梯度，而是累计过去梯度方向，让更新更有惯性：
+
+```math
+v_t = \beta v_{t-1} + g_t
+```
+
+Adagrad 改进的是第二部分。它仍然使用当前梯度方向，但会根据每个参数过去的梯度大小调整有效学习率：
+
+```math
+\begin{aligned}
+s_t &= s_{t-1} + g_t^2 \\
+\theta_{t+1} &= \theta_t - \eta \frac{g_t}{\sqrt{s_t}+\epsilon}
+\end{aligned}
+```
+
+两种改进的侧重点不同：
+
+- Momentum 关注的是**方向的平滑和加速**；
+- Adagrad 关注的是**不同参数的步长缩放**。
+
+这两条思路后面会在 Adam 中重新汇合。Adam 一方面像 momentum 一样维护梯度的一阶动量，另一方面又像 RMSprop 一样维护梯度平方的滑动平均，用来做自适应缩放。
+
+不过，在讲 Adam 之前，我们先来讲讲 RMSprop。它会从 Adagrad 的主要问题出发：
+
+> **既然历史梯度平方和一直累积会让学习率越来越小，那能不能让优化器忘掉太久以前的梯度？**
+
+## 4.3.8 本章小结
+
+本节从 SGD 和 momentum 共享全局学习率的限制出发，介绍了 Adagrad。
+
+Adagrad 的核心思想是为每个参数维护历史梯度平方和：
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+然后用这个累计量缩放当前梯度：
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{s_t}+\epsilon}
+```
+
+这样，过去梯度较大的参数会获得更小的有效学习率；过去梯度较小或者很少被更新的参数，则会保留相对较大的有效学习率。
+
+参数级缩放使 Adagrad 适合稀疏特征：频繁更新的参数逐渐减小步长，低频参数仍能保留相对较大的有效学习率。它的限制也来自同一个累计量。历史梯度平方和单调不减，因此只要参数持续获得非零梯度，有效学习率就会下降，训练后期可能过于保守。
+
+下一节我们会看到，RMSprop 和 Adadelta 正是沿着这个问题继续改进。它们保留了 Adagrad 的自适应缩放思想，但把“累计所有历史梯度平方”改成了“最近梯度平方的滑动平均”。

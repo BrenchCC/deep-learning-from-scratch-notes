@@ -1,0 +1,366 @@
+---
+author: Brench
+date: 2026-07-11
+date-modified: 2026-07-11
+open-graph:
+  title: chapter4.3-adagrad
+  description: "4.3 Adagrad: The Starting Point of Adaptive Learning Rates"
+title: "Chapter 4.3 Adagrad: The Starting Point of Adaptive Learning Rates"
+order: 3
+---
+
+The previous two sections moved from gradient descent to SGD and then introduced momentum.
+
+The basic SGD update is:
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+Momentum accumulates recent gradient directions:
+
+```math
+\begin{aligned}
+v_t &= \beta v_{t-1} + g_t \\
+\theta_{t+1} &= \theta_t - \eta v_t
+\end{aligned}
+```
+
+Momentum addresses the update direction. A mini-batch gradient contains noise, so the update can use the recent accumulated trend as well as the current gradient. This accelerates consistent directions and reduces oscillation when a gradient repeatedly changes sign.
+
+One problem remains:
+
+> **All parameters still share one learning rate.**
+
+In SGD and momentum, $\eta$ is a global scalar. A parameter with consistently large gradients and another with small or sparse gradients receive the same learning rate. A large learning rate can make the first parameter overshoot; a small learning rate can make the second learn too slowly.
+
+Adagrad [@Duchi2011Adagrad] addresses this mismatch by using each parameter's gradient history:
+
+> **Instead of assigning one learning rate to every parameter, adjust each parameter's effective learning rate from its past gradient magnitudes.**
+
+```{python}
+from collections.abc import Iterable
+from typing import override
+
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch import Tensor
+
+plt.rc('figure', dpi = 100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.3.1 The Limitation of a Global Learning Rate
+
+Consider a two-dimensional parameter:
+
+```math
+\theta = (\theta_1, \theta_2)
+```
+
+Suppose $\theta_1$ often receives large gradients while $\theta_2$ receives small gradients. With ordinary SGD,
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+both parameters use the same $\eta$. The update for $\theta_1$ may be too large and oscillate; the update for $\theta_2$ may be too small and learn slowly. The issue is the different gradient scales, not necessarily the gradient directions.
+
+Sparse features make this mismatch especially clear. In a model with a word-embedding table, frequent words update their embeddings in many batches, while rare words update only occasionally. A more suitable strategy is to make frequently updated parameters more conservative and allow infrequently updated parameters to take relatively larger steps when they appear. This is the motivation for Adagrad.
+
+## 4.3.2 The Core Idea of Adagrad
+
+Adagrad means **Adaptive Gradient Algorithm** [@Duchi2011Adagrad]. It maintains a sum of squared gradients with the same shape as the parameters.
+
+For the gradient at step $t$,
+
+```math
+g_t = \nabla_\theta L_t(\theta_t)
+```
+
+Adagrad maintains $s_t$:
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+The square is element-wise. It then scales the current gradient:
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{s_t}+\epsilon}
+```
+
+Here, $\epsilon$ is a small constant that prevents division by zero. If a parameter has repeatedly received large gradients, its $s_t$ grows quickly, so the denominator becomes larger and its effective update becomes smaller. If a parameter is rarely updated or its gradients are small, $s_t$ grows slowly and its effective learning rate remains relatively larger.
+
+Each parameter therefore has its own scaling factor:
+
+```math
+\frac{\eta}{\sqrt{s_t}+\epsilon}
+```
+
+In short, Adagrad automatically reduces the learning rate of parameters that have accumulated large historical gradients.
+
+## 4.3.3 Adagrad Through Effective Learning Rates
+
+The SGD update is
+
+```math
+\Delta \theta_t = - \eta g_t
+```
+
+Adagrad changes it to
+
+```math
+\Delta \theta_t = - \frac{\eta}{\sqrt{s_t}+\epsilon} g_t
+```
+
+The element-wise effective learning rate is
+
+```math
+\eta_t = \frac{\eta}{\sqrt{s_t}+\epsilon}
+```
+
+Because
+
+```math
+s_t = \sum_{i=1}^{t} g_i^2
+```
+
+$s_t$ is non-decreasing. As long as a parameter continues to receive non-zero gradients, its effective learning rate decreases; if its gradient is zero, both the accumulator and effective learning rate remain unchanged.
+
+This gives Adagrad three direct properties:
+
+- It reduces the learning rate of frequently updated parameters.
+- It preserves relatively larger updates for sparse parameters when they appear.
+- Its effective learning rates can become very small after long training.
+
+The first two properties help early in training. The third is the main limitation. Once $s_t$ has accumulated many squared gradients, the denominator can become large and the parameters may nearly stop moving. RMSprop and Adadelta later modify this part: they retain parameter-wise scaling but avoid accumulating every historical squared gradient forever.
+
+## 4.3.4 Comparing Adagrad and SGD Trajectories
+
+Consider the two-dimensional loss
+
+```math
+L(x, y) = 0.1 (x - 2)^2 + 2.0 (y + 1)^2
+```
+
+The $y$ direction is steeper than the $x$ direction. Ordinary SGD may need a small learning rate to remain stable on this narrow valley. Adagrad uses the historical gradient magnitude in each direction: the effective learning rate in the steep $y$ direction decreases faster, while the flatter $x$ direction retains a relatively larger value.
+
+First define the loss:
+
+```{python}
+def loss_fn(theta: Tensor) -> Tensor:
+    """Compute a two-dimensional quadratic loss.
+
+    Args:
+        theta: Tensor containing the two optimization parameters.
+
+    Returns:
+        Scalar quadratic loss value.
+    """
+    x, y = theta[0], theta[1]
+    return 0.1 * (x - 2) ** 2 + 2.0 * (y + 1) ** 2
+```
+
+Implement Adagrad:
+
+```{python}
+class Adagrad(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1e-2,
+        lr_decay: float = 0.0,
+        weight_decay: float = 0.0,
+        initial_accumulator_value: float = 0.0,
+        eps: float = 1e-10,
+    ):
+        """Initialize the Adagrad optimizer.
+
+        Args:
+            params: Iterable of tensors to optimize.
+            lr: Base learning rate.
+            lr_decay: Learning-rate decay applied per step.
+            weight_decay: L2 penalty coefficient.
+            initial_accumulator_value: Initial value of each squared-gradient sum.
+            eps: Constant added to the denominator for numerical stability.
+        """
+        super().__init__(params)
+        self.lr = lr
+        self.lr_decay = lr_decay
+        self.weight_decay = weight_decay
+        self.initial_accumulator_value = initial_accumulator_value
+        self.eps = eps
+
+        self.step_count = 0
+        self.sum_of_sq_grads = [
+            torch.full_like(p, initial_accumulator_value) for p in self.params
+        ]
+        self.effective_lrs = []
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        """Apply one Adagrad update to all parameters with gradients."""
+        self.step_count += 1
+        clr = self.lr / (1 + (self.step_count - 1) * self.lr_decay)
+
+        for p, s in zip(self.params, self.sum_of_sq_grads, strict=True):
+            if p.grad is None:
+                continue
+
+            grad = p.grad
+            if self.weight_decay > 0:
+                grad = grad.add(p, alpha = self.weight_decay)
+
+            s.add_(grad.square())
+            p.sub_(clr / (s.sqrt() + self.eps) * grad)
+
+        self.effective_lrs.append(self.get_effective_lr())
+
+    @torch.no_grad()
+    def get_effective_lr(self) -> list[Tensor]:
+        """Return the current element-wise effective learning rates."""
+        effective_lr = []
+
+        for s in self.sum_of_sq_grads:
+            lr = self.lr / (s.sqrt() + self.eps).clone()
+            effective_lr.append(lr)
+
+        return effective_lr
+```
+
+Run both optimizers and plot their trajectories:
+
+```{python}
+theta1 = torch.tensor([-5.0, 2.0], requires_grad = True)
+theta2 = torch.tensor([-5.0, 2.0], requires_grad = True)
+optimizer1 = dopt.SGD([theta1], lr = 0.4)
+optimizer2 = Adagrad([theta2], lr = 1.2)
+
+sgd_history = dopt.run_optimizer(optimizer1, loss_fn, steps = 40)
+adagrad_history = dopt.run_optimizer(optimizer2, loss_fn, steps = 40)
+
+x = torch.linspace(-6.5, 5.5, 200)
+y = torch.linspace(-3.5, 2.5, 200)
+X, Y = torch.meshgrid(x, y, indexing = 'ij')
+Z = 0.1 * (X - 2) ** 2 + 2.0 * (Y + 1) ** 2
+
+fig = plt.figure(1)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels = 25, cmap = 'YlGnBu')
+ax.plot(
+    sgd_history[:, 0],
+    sgd_history[:, 1],
+    color = '#EC705B',
+    marker = 'o',
+    markersize = 3,
+    markerfacecolor = '#C0392B',
+    markeredgecolor = 'white',
+    markeredgewidth = 0.5,
+)
+ax.plot(
+    adagrad_history[:, 0],
+    adagrad_history[:, 1],
+    color = '#4B96EB',
+    marker = 'o',
+    markersize = 3,
+    markerfacecolor = '#2A74C8',
+    markeredgecolor = 'white',
+    markeredgewidth = 0.5,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.legend(['SGD', 'Adagrad'])
+ax.set_title('SGD vs. Adagrad Trajectory')
+plt.show()
+```
+
+SGD oscillates strongly along the $y$ direction, while Adagrad reaches the neighborhood of the minimum sooner. The reason is that the historical gradients in the $y$ direction are larger, so Adagrad reduces that direction's effective learning rate faster. The later part of the trajectory also exposes its limitation: once the accumulator is large, the update becomes very small and the parameters nearly stop moving.
+
+## 4.3.5 Visualizing Adagrad Effective Learning Rates
+
+The key behavior to inspect is the effective learning rate produced by Adagrad:
+
+```{python}
+lr_history = torch.stack([lr[0] for lr in optimizer2.effective_lrs])
+steps = torch.arange(1, lr_history.size(0) + 1)
+
+fig = plt.figure(2, figsize = (6, 4))
+ax = fig.add_subplot(1, 1, 1)
+ax.plot(steps, lr_history[:, 0], marker = 'o', markersize = 3)
+ax.plot(steps, lr_history[:, 1], marker = 'o', markersize = 3)
+ax.set_xlabel('Step')
+ax.set_ylabel('Effective learning rate')
+ax.legend([r'$\theta_1$', r'$\theta_2$'])
+ax.set_title('Effective Learning Rates in Adagrad')
+plt.show()
+```
+
+The two parameters have different effective learning rates because they maintain separate accumulators. As long as a parameter receives non-zero gradients, its effective learning rate decreases:
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+Adagrad does not forget early large gradients. Even if the gradient scale changes later, the early accumulation continues to suppress the update step.
+
+## 4.3.6 Why Does Adagrad Fit Sparse Features?
+
+Adagrad's parameter-wise scaling is particularly useful for sparse features. In a large embedding table, a mini-batch usually contains only a small subset of tokens, so only those token embeddings receive non-zero gradients.
+
+Frequent tokens update often, so their $s_t$ grows and their effective learning rates decrease. Rare tokens update infrequently, so their accumulators grow slowly; when they appear, they can still take relatively large effective steps. Frequent parameters therefore become more conservative, while low-frequency parameters are not disabled merely because the global learning rate is small.
+
+This behavior explains Adagrad's usefulness in some sparse-feature tasks. For modern deep networks, especially long training runs and large models, the continuing decay is a serious limitation. Adagrad is useful for understanding adaptive learning rates, but it is usually not the default optimizer for long-running deep-learning training.
+
+## 4.3.7 Adagrad Compared with SGD and Momentum
+
+SGD, momentum, and Adagrad modify different parts of the optimization process.
+
+SGD uses only the current gradient, and all parameters share one learning rate. Momentum changes the first part by accumulating recent gradient directions:
+
+```math
+v_t = \beta v_{t-1} + g_t
+```
+
+Adagrad changes the second part. It still uses the current gradient direction, but scales each parameter from its historical gradient magnitude:
+
+```math
+\begin{aligned}
+s_t &= s_{t-1} + g_t^2 \\
+\theta_{t+1} &= \theta_t - \eta \frac{g_t}{\sqrt{s_t}+\epsilon}
+\end{aligned}
+```
+
+Their emphases are different:
+
+- Momentum smooths and accelerates the update direction.
+- Adagrad scales the step separately for each parameter.
+
+Adam later combines these ideas. It maintains a first-moment estimate like momentum and a moving average of squared gradients like RMSprop. Before discussing Adam, the next section turns to RMSprop and asks whether an optimizer can forget gradients from the distant past instead of accumulating them forever.
+
+## 4.3.8 Summary
+
+This section started from the limitation that SGD and momentum use one global learning rate and introduced Adagrad.
+
+Adagrad maintains a historical sum of squared gradients:
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+It scales the current gradient with that accumulator:
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{s_t}+\epsilon}
+```
+
+Parameters with large historical gradients receive smaller effective learning rates. Parameters with small or sparse gradients retain relatively larger effective learning rates. This makes Adagrad useful for sparse features and a clear introduction to parameter-wise learning-rate adaptation.
+
+The same accumulator creates its main limitation. It never decreases, so effective learning rates can become too small during long training. RMSprop and Adadelta keep the adaptive-scaling idea but replace the sum over all historical squared gradients with a moving average of recent squared gradients.
