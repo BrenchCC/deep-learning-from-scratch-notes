@@ -1,0 +1,527 @@
+---
+author: Brench
+date: 2026-07-12
+date-modified: 2026-07-12
+open-graph:
+  title: chapter 4.4-rmsprop-adadelta
+  description: "4.4 RMSprop and Adadelta: Correcting Learning-Rate Decay"
+title: "Chapter 4.4 RMSprop and Adadelta: Correcting Learning-Rate Decay"
+order: 4
+---
+
+The previous section introduced Adagrad. Instead of assigning one learning rate to every parameter, it maintains a historical sum of squared gradients for each parameter:
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+It then uses this accumulator to scale the current gradient:
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{s_t} + \epsilon}
+```
+
+Repeatedly large gradients make $s_t$ grow and reduce the corresponding effective learning rate. Infrequently updated parameters accumulate more slowly and retain relatively larger effective learning rates, which makes Adagrad useful for sparse features.
+
+The limitation is equally direct: $s_t$ never decreases, so the **effective learning rate can only decrease**. Gradients from early training remain in the accumulator even when they no longer represent the local optimization geometry. Late in training, the denominator can become so large that parameters barely move.
+
+This motivates a specific question:
+
+> **Can parameter-wise adaptive learning rates be retained without allowing the historical accumulator to grow indefinitely?**
+
+RMSprop [@tieleman2012RMSprop] and Adadelta [@zeiler2012Adadelta] answer this question with an **exponential moving average (EMA)** of recent gradient scales instead of a sum over the complete history.
+
+```{python}
+from collections.abc import Iterable
+from typing import override
+
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+plt.rc('figure', dpi=100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.4.1 Adagrad's Limitation: An Overlong Memory
+
+Recall the Adagrad update:
+
+```math
+\theta_{t+1} = \theta_{t} - \frac{\eta}{\sqrt{s_{t}} + \epsilon} g_{t}
+```
+
+where
+
+```math
+s_{t} = \sum_{\tau=1}^{t} g_{\tau}^2
+```
+
+The effective learning rate is therefore
+
+```math
+\eta_{t} = \frac{\eta}{\sqrt{s_{t}} + \epsilon}
+```
+
+Because $g_{\tau}^2 \ge 0$, $s_t$ cannot decrease:
+
+```math
+s_{1} \le s_{2} \le \cdots \le s_{t}
+```
+
+The effective learning rate is consequently non-increasing:
+
+```math
+\eta_{1} \ge \eta_{2} \ge \cdots \ge \eta_{t}
+```
+
+This behavior can stabilize frequently updated parameters by gradually reducing their step sizes. The problem is that Adagrad never forgets old gradients. Even after the parameters enter a different region of the loss surface, large early gradients remain in $s_t$ and continue to suppress later updates.
+
+The following simulation uses a periodically varying gradient magnitude. Although the gradient scale repeats, the accumulated squared gradients keep growing and the effective learning rate keeps falling:
+
+```{python}
+num_steps = 200
+initial_lr = 1.0
+eps = 1e-10
+
+simulated_grad = torch.arange(1, num_steps + 1, dtype=torch.float32)
+simulated_grad = 1.0 + 0.5 * (simulated_grad / 10.0).sin()
+
+sum_of_sq_grad = torch.tensor(0.0)
+adagrad_lr_history = []
+
+for grad in simulated_grad:
+    sum_of_sq_grad += grad.square()
+    lr = initial_lr / (sum_of_sq_grad.sqrt() + eps)
+    adagrad_lr_history.append(lr.item())
+
+fig = plt.figure(1, figsize=(6, 4))
+ax = fig.add_subplot(1, 1, 1)
+ax.plot(adagrad_lr_history)
+ax.set_xlabel('Step')
+ax.set_ylabel('Effective Learning Rate')
+ax.set_title('Adagrad Effective Learning Rate Keeps Decreasing')
+plt.show()
+```
+
+The plot isolates the issue: adaptive scaling itself is not the problem. The complete-history estimator is. Correcting the decay requires a different estimate of gradient scale.
+
+## 4.4.2 From a Cumulative Sum to a Moving Average
+
+Adagrad maintains a cumulative sum of squared gradients:
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+Every past gradient remains in this quantity permanently. A more useful estimator should emphasize recent gradient scales without storing the last $k$ gradients explicitly. An exponential moving average does this:
+
+```math
+v_t = \rho v_{t-1} + (1 - \rho) g_t^2
+```
+
+Here $\rho$ is usually close to 1, such as 0.9 or 0.99. The term $\rho v_{t-1}$ retains the previous estimate, while $(1-\rho)g_t^2$ incorporates the current squared gradient. A larger $\rho$ produces a smoother, longer-memory estimate; a smaller value reacts faster to the current gradient. Unlike Adagrad's accumulator, the influence of an old gradient decays exponentially.
+
+Expanding the recurrence makes the weighting explicit:
+
+```math
+v_t = (1-\rho)g_t^2 + \rho(1-\rho)g_{t-1}^2 + \rho^2(1-\rho)g_{t-2}^2 + \cdots
+```
+
+Older gradients receive exponentially smaller weights. The estimator therefore preserves recent scale information while gradually forgetting obsolete observations.
+
+## 4.4.3 RMSprop: Estimating Gradient Scale with an EMA
+
+RMSprop [@tieleman2012RMSprop] replaces Adagrad's cumulative sum with an exponential moving average of squared gradients:
+
+```math
+v_t = \rho v_{t-1} + (1 - \rho) g_t^2
+```
+
+It uses $v_t$ to scale the gradient:
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{v_t} + \epsilon}
+```
+
+The two estimators differ in one line:
+
+```math
+\text{Adagrad:} \quad s_t = s_{t-1} + g_t^2
+```
+
+```math
+\text{RMSprop:} \quad v_t = \rho v_{t-1} + (1 - \rho) g_t^2
+```
+
+$v_t$ estimates the parameter's recent squared-gradient scale. Consistently large recent gradients increase the denominator and reduce the effective learning rate; consistently small gradients allow the denominator to decrease again. The emphasis is on **recent** gradients.
+
+Adagrad asks how much squared gradient a parameter has accumulated since training began. RMSprop asks for its approximate gradient scale over a recent window. This distinction matters in non-stationary optimization: as parameters move through the loss surface, early gradient statistics may cease to describe the current region.
+
+The following comparison uses the same periodic gradient sequence:
+
+```{python}
+rho = 0.9
+velocity = torch.tensor(0.0)
+rmsprop_lr_history = []
+
+for t, grad in enumerate(simulated_grad, start=1):
+    velocity = rho * velocity + (1 - rho) * grad.square()
+    # We do bias correction to make it comparable to Adagrad's
+    # effective learning rate.
+    velocity_adj = velocity / (1 - pow(rho, t))
+    lr = initial_lr / (velocity_adj.sqrt() + eps)
+    rmsprop_lr_history.append(lr.item())
+
+fig = plt.figure(2, figsize=(6, 4))
+ax = fig.add_subplot(1, 1, 1)
+ax.plot(adagrad_lr_history)
+ax.plot(rmsprop_lr_history)
+ax.set_xlabel('Step')
+ax.set_ylabel('Effective Learning Rate')
+ax.legend(['Adagrad', 'RMSprop'])
+ax.set_title('Adagrad vs. RMSprop')
+plt.show()
+```
+
+Adagrad's effective learning rate continues to fall, whereas RMSprop's rate follows the changing gradient scale. The moving average prevents the monotonic decay caused by a complete-history sum.
+
+## 4.4.4 A PyTorch Implementation of RMSprop
+
+The simplified implementation below stores one `ema_of_sq_grads` tensor per parameter. Each tensor records the moving average of squared gradients.
+
+```{python}
+class RMSprop(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1e-2,
+        rho: float = 0.99,
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+        momentum: float = 0.0,
+    ):
+        super().__init__(params)
+        self.lr = lr
+        self.rho = rho
+        self.eps = eps
+        self.weight_decay = weight_decay
+        self.momentum = momentum
+
+        self.ema_of_sq_grads = [torch.zeros_like(p) for p in self.params]
+        self.momentum_buffers = [torch.zeros_like(p) for p in self.params]
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        for p, v, buffer in zip(
+            self.params,
+            self.ema_of_sq_grads,
+            self.momentum_buffers,
+            strict=True,
+        ):
+            if p.grad is None:
+                continue
+
+            grad = p.grad
+            if self.weight_decay > 0:
+                grad = grad.add(p, alpha=self.weight_decay)
+
+            v.mul_(self.rho).add_(grad.square(), alpha=1 - self.rho)
+
+            if self.momentum > 0:
+                buffer.mul_(self.momentum).addcdiv_(grad, v.sqrt() + self.eps)
+                p.sub_(buffer, alpha=self.lr)
+            else:
+                p.addcdiv_(grad, v.sqrt() + self.eps, value=-self.lr)
+
+    @torch.no_grad()
+    def get_effective_lr(self) -> list[Tensor]:
+        effective_lr = []
+
+        for v in self.ema_of_sq_grads:
+            lr = self.lr / (v.sqrt() + self.eps).clone()
+            effective_lr.append(lr)
+
+        return effective_lr
+```
+
+The central state update is:
+
+```python
+v.mul_(self.rho).add_(grad.square(), alpha=1 - self.rho)
+```
+
+It implements:
+
+```math
+v_t = \rho v_{t-1} + (1 - \rho) g_t^2
+```
+
+`zero_grad()` clears `.grad`, not `ema_of_sq_grads`. The mini-batch gradient buffer must be cleared before the next backward pass, while optimizer state must persist across steps.
+
+## 4.4.5 Adadelta: Reducing Dependence on a Global Learning Rate
+
+RMSprop corrects complete-history accumulation, but still uses a global learning rate $\eta$:
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{v_t} + \epsilon}
+```
+
+This raises a further question:
+
+> **Can adaptation to gradient scale further reduce dependence on a manually chosen learning rate?**
+
+Adadelta [@zeiler2012Adadelta] follows this direction. Like RMSprop, it maintains an EMA of squared gradients:
+
+```math
+E[g^2]_t = \rho E[g^2]_{t-1} + (1 - \rho)g_t^2
+```
+
+It additionally maintains an EMA of squared parameter updates:
+
+```math
+E[\Delta \theta^2]_t = \rho E[\Delta \theta^2]_{t-1} + (1 - \rho)(\Delta \theta_t)^2
+```
+
+The update is:
+
+```math
+\Delta \theta_t = -\frac{\sqrt{E[\Delta \theta^2]_{t-1} + \epsilon}}{\sqrt{E[g^2]_t + \epsilon}} g_t
+```
+
+followed by:
+
+```math
+\theta_{t+1} = \theta_t + \Delta \theta_t
+```
+
+The expression is more involved than RMSprop, but its interpretation is direct.
+
+RMSprop normalizes by recent gradient scale. Adadelta also estimates recent update scale: large historical updates permit a larger current update, while small ones keep it conservative.
+
+Its scaling ratio is:
+
+```math
+\frac{\mathrm{RMS}[\Delta \theta]_{t-1}}{\mathrm{RMS}[g]_t}
+```
+
+The denominator measures recent gradient scale; the numerator measures recent update scale.
+
+This ratio calibrates updates from their own history. Original Adadelta needs no global `lr`, although PyTorch retains it as a practical global multiplier.
+
+## 4.4.6 A PyTorch Implementation of Adadelta
+
+The simplified implementation maintains two states:
+
+- `ema_of_sq_grads`: EMA of squared gradients;
+- `ema_of_sq_updates`: EMA of squared updates.
+
+```{python}
+class Adadelta(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1.0,
+        rho: float = 0.9,
+        eps: float = 1e-6,
+        weight_decay: float = 0.0,
+    ):
+        super().__init__(params)
+        self.lr = lr
+        self.rho = rho
+        self.eps = eps
+        self.weight_decay = weight_decay
+
+        self.ema_of_sq_grads = [torch.zeros_like(p) for p in self.params]
+        self.ema_of_sq_updates = [torch.zeros_like(p) for p in self.params]
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        for p, v, u in zip(
+            self.params,
+            self.ema_of_sq_grads,
+            self.ema_of_sq_updates,
+            strict=True,
+        ):
+            if p.grad is None:
+                continue
+
+            grad = p.grad
+            if self.weight_decay > 0:
+                grad = grad.add(p, alpha=self.weight_decay)
+
+            v.mul_(self.rho).add_(grad.square(), alpha=1 - self.rho)
+            delta_x = (u + self.eps).sqrt() / (v + self.eps).sqrt() * grad
+
+            u.mul_(self.rho).add_(delta_x.square(), alpha=1 - self.rho)
+            p.sub_(delta_x, alpha=self.lr)
+
+    @torch.no_grad()
+    def get_effective_lr(self) -> list[Tensor]:
+        effective_lr = []
+
+        for v, u in zip(
+            self.ema_of_sq_grads,
+            self.ema_of_sq_updates,
+            strict=True,
+        ):
+            lr = self.lr * (u + self.eps).sqrt() / (v + self.eps).sqrt()
+            effective_lr.append(lr)
+
+        return effective_lr
+```
+
+The update-scale calculation is:
+
+```python
+delta_x = (u + self.eps).sqrt() / (v + self.eps).sqrt() * grad
+```
+
+It implements:
+
+```math
+\Delta \theta_t = -\frac{\sqrt{E[\Delta \theta^2]_{t-1} + \epsilon}}{\sqrt{E[g^2]_t + \epsilon}} g_t
+```
+
+The squared update is then incorporated into `ema_of_sq_updates`:
+
+```python
+u.mul_(self.rho).add_(
+    delta_x.square(),
+    alpha=1 - self.rho,
+)
+```
+
+This corresponds to:
+
+```math
+E[\Delta \theta^2]_t = \rho E[\Delta \theta^2]_{t-1} + (1 - \rho)(\Delta \theta_t)^2
+```
+
+## 4.4.7 How RMSprop and Adadelta Relate
+
+The three methods can now be compared directly.
+
+Adagrad uses:
+
+```math
+s_t = s_{t-1} + g_t^2
+```
+
+RMSprop replaces the sum with:
+
+```math
+v_t = \rho v_{t-1} + (1 - \rho) g_t^2
+```
+
+Adadelta uses the same squared-gradient EMA:
+
+```math
+E[g^2]_t = \rho E[g^2]_{t-1} + (1 - \rho)g_t^2
+```
+
+and additionally maintains:
+
+```math
+E[\Delta \theta^2]_t = \rho E[\Delta \theta^2]_{t-1} + (1 - \rho)(\Delta \theta_t)^2
+```
+
+Their relationship is:
+
+- Adagrad uses a complete-history squared-gradient sum.
+- RMSprop changes the sum to an EMA, avoiding monotonic decay.
+- Adadelta adds historical update scale to reduce dependence on a global rate.
+
+RMSprop is the more direct precursor to Adam because Adam's second-moment estimate closely resembles its squared-gradient EMA.
+
+Adam combines momentum and RMSprop:
+
+- Momentum maintains a first moment to smooth update directions.
+- RMSprop maintains a squared-gradient EMA for parameter-wise scaling.
+
+Adam maintains both quantities.
+
+## 4.4.8 Experiment: Comparing Three Optimizers
+
+The final experiment compares Adagrad, RMSprop, and Adadelta on a two-dimensional quadratic loss.
+
+```{python}
+def loss_fn(theta: Tensor) -> Tensor:
+    x, y = theta[0], theta[1]
+    return 0.1 * (x - 2) ** 2 + 2.0 * (y + 1) ** 2
+
+
+theta1 = torch.tensor([-5.0, 2.0], requires_grad=True)
+theta2 = torch.tensor([-5.0, 2.0], requires_grad=True)
+theta3 = torch.tensor([-5.0, 2.0], requires_grad=True)
+
+optimizer1 = dopt.Adagrad([theta1], lr=1.2)
+optimizer2 = RMSprop([theta2], lr=0.5, rho=0.9)
+optimizer3 = Adadelta([theta3], lr=100.0, rho=0.99)
+
+adagrad_history = dopt.run_optimizer(optimizer1, loss_fn, steps=40)
+rmsprop_history = dopt.run_optimizer(optimizer2, loss_fn, steps=40)
+adadelta_history = dopt.run_optimizer(optimizer3, loss_fn, steps=40)
+
+x = torch.linspace(-6.5, 5.5, 200)
+y = torch.linspace(-3.5, 2.5, 200)
+X, Y = torch.meshgrid(x, y, indexing='ij')
+Z = 0.1 * (X - 2) ** 2 + 2.0 * (Y + 1) ** 2
+
+fig = plt.figure(3)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels=25, cmap='YlGnBu')
+common_kwargs = dict(
+    marker='o',
+    markersize=3,
+    markeredgecolor='white',
+    markeredgewidth=0.5,
+)
+ax.plot(
+    adagrad_history[:, 0],
+    adagrad_history[:, 1],
+    color='#EC705B',
+    markerfacecolor='#C0392B',
+    **common_kwargs,
+)
+ax.plot(
+    rmsprop_history[:, 0],
+    rmsprop_history[:, 1],
+    color='#4B96EB',
+    markerfacecolor='#2A74C8',
+    **common_kwargs,
+)
+ax.plot(
+    adadelta_history[:, 0],
+    adadelta_history[:, 1],
+    color='#58D68D',
+    markerfacecolor='#27AE60',
+    **common_kwargs,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.legend(['Adagrad', 'RMSprop', 'Adadelta'])
+ax.set_title('Adagrad vs. RMSprop vs. Adadelta Trajectory')
+plt.show()
+```
+
+Adagrad slows late because its accumulator keeps reducing the effective rate. RMSprop and Adadelta use EMAs, so early gradients do not dominate later updates. Their similar trajectories here demonstrate mechanism, not realistic optimizer ranking.
+
+## 4.4.9 Summary
+
+Adagrad motivates both RMSprop and Adadelta.
+
+Adagrad provides adaptive rates through a non-decreasing sum of squared gradients, which can make late updates extremely small.
+
+RMSprop replaces the sum with an EMA, allowing each effective rate to track recent gradient scale.
+
+Adadelta tracks squared updates as well and uses their scale to calibrate current updates.
+
+Adam follows naturally: momentum supplies a first-moment direction estimate, while an RMSprop-like second moment supplies parameter-wise scaling.
