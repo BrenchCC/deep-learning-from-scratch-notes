@@ -1,0 +1,343 @@
+---
+author: Brench
+date: 2026-07-13
+date-modified: 2026-07-13
+open-graph:
+  title: chapter 4.5-adam
+  description: "4.5 Adam: Combining Momentum and RMSprop"
+title: "Chapter 4.5 Adam: Combining Momentum and RMSprop"
+order: 5
+---
+
+The preceding sections exposed two direct limitations of basic SGD.
+
+First, mini-batch gradients contain sampling noise. When each update uses only the current batch, the direction can oscillate, particularly early in training. Momentum reduces this sensitivity by maintaining a moving average of gradient directions:
+
+```math
+m_t = \beta m_{t-1} + (1 - \beta) g_t
+```
+
+Second, gradient scales can differ substantially across parameters. A shared learning rate may move some parameters too quickly and others too slowly. RMSprop maintains a moving average of squared gradients for every parameter:
+
+```math
+v_t = \rho v_{t-1} + (1 - \rho) g_t^2
+```
+
+It scales the current gradient by $\sqrt{v_t}$:
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{v_t} + \epsilon}
+```
+
+This leads to a specific question:
+
+> **Can Momentum and RMSprop be combined?**
+
+The desired optimizer should smooth noisy update directions while assigning parameter-wise adaptive effective learning rates. This is the central idea of **Adam (Adaptive Moment Estimation)** [@kingma2017Adam].
+
+```{python}
+from collections.abc import Iterable
+from typing import override
+
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+plt.rc('figure', dpi=100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.5.1 Adam's Two State Variables
+
+SGD uses only the current gradient:
+
+```math
+\theta_{t+1} = \theta_t - \eta g_t
+```
+
+Momentum first computes a first-moment estimate and then updates the parameters with it:
+
+```math
+m_t = \beta m_{t-1} + (1 - \beta) g_t
+```
+
+```math
+\theta_{t+1} = \theta_t - \eta m_t
+```
+
+$m_t$ is a moving average of gradient directions and reduces directional oscillation. RMSprop instead tracks recent squared-gradient scale:
+
+```math
+v_t = \rho v_{t-1} + (1 - \rho) g_t^2
+```
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{g_t}{\sqrt{v_t} + \epsilon}
+```
+
+Adam maintains both quantities:
+
+```math
+\begin{aligned}
+m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t \\
+v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2
+\end{aligned}
+```
+
+Here $m_t$ estimates the first moment and acts as momentum; $v_t$ estimates the second raw moment through squared gradients. The coefficients $\beta_1$ and $\beta_2$ control their respective memory lengths. Ignoring bias correction temporarily, the update is approximately
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{m_t}{\sqrt{v_t} + \epsilon}
+```
+
+or, schematically,
+
+```math
+\text{Adam} \approx \frac{\text{Momentum}}{\text{RMSprop scaling}}
+```
+
+The numerator determines direction, while the denominator provides parameter-wise scaling.
+
+## 4.5.2 First Moment: Smoothing the Gradient Direction
+
+Adam's first state is
+
+```math
+m_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t
+```
+
+The current gradient and the previous estimate jointly determine the new state. A larger $\beta_1$ gives more weight to historical directions and produces smoother updates; a smaller value reacts faster to the current gradient. A common default is
+
+```math
+\beta_1 = 0.9
+```
+
+The current gradient then receives weight 0.1 and the previous estimate weight 0.9, so one unusual mini-batch does not immediately reverse the update direction. In practical terms, $m_t$ estimates where gradients have pointed over the recent past.
+
+## 4.5.3 Second Moment: Estimating Parameter-wise Gradient Scale
+
+Adam's second state is
+
+```math
+v_t = \beta_2 v_{t-1} + (1 - \beta_2) g_t^2
+```
+
+The square is element-wise, so each parameter has its own $v_t$. Persistently large gradients increase the denominator and reduce the effective step size; persistently small gradients retain a relatively larger step size. A common default is
+
+```math
+\beta_2 = 0.999
+```
+
+This value is usually closer to 1 than $\beta_1$, giving the scale estimate a longer memory. Gradient direction may need to react quickly to the current batch, whereas scale estimates generally benefit from greater stability. Thus $m_t$ estimates direction and $v_t$ estimates magnitude; Adam updates along $m_t$ and scales each coordinate by $\sqrt{v_t}$.
+
+## 4.5.4 Why Bias Correction Is Necessary
+
+Both moving averages are normally initialized at zero:
+
+```math
+m_0 = 0, \quad v_0 = 0
+```
+
+This initialization biases early estimates toward zero. At the first step,
+
+```math
+m_1 = \beta_1 m_0 + (1 - \beta_1) g_1 = (1 - \beta_1) g_1
+```
+
+With $\beta_1 = 0.9$, $m_1 = 0.1g_1$. At the second step,
+
+```math
+m_2 = \beta_1(1 - \beta_1)g_1 + (1 - \beta_1)g_2
+```
+
+If $g_1 \approx g_2 \approx g$, then
+
+```math
+m_2 \approx (1 - \beta_1)(\beta_1 + 1)g = (1 - \beta_1^2)g
+```
+
+More generally, early $m_t$ is smaller by approximately $1 - \beta_1^t$. Adam removes this initialization bias with
+
+```math
+\hat{m}_t = \frac{m_t}{1 - \beta_1^t}
+```
+
+The same argument gives the corrected second moment:
+
+```math
+\hat{v}_t = \frac{v_t}{1 - \beta_2^t}
+```
+
+The complete Adam update is therefore
+
+```math
+\begin{aligned}
+g_t &= \nabla_\theta L_{\mathcal{B}_t}(\theta_t) \\
+m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t \\
+v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2 \\
+\hat{m}_t &= \frac{m_t}{1 - \beta_1^t} \\
+\hat{v}_t &= \frac{v_t}{1 - \beta_2^t} \\
+\theta_{t+1} &= \theta_t - \eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+\end{aligned}
+```
+
+Adam is not universally superior. It introduces additional state and hyperparameters, and its interaction with weight decay motivates AdamW.
+
+## 4.5.5 A PyTorch Implementation of Adam
+
+The following implementation makes the two state estimates and bias correction explicit.
+
+```{python}
+class Adam(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1e-3,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ):
+        super().__init__(params)
+        self.lr = lr
+        self.beta1 = betas[0]
+        self.beta2 = betas[1]
+        self.eps = eps
+        self.weight_decay = weight_decay
+
+        self.step_count = 0
+        self.exp_avg = [torch.zeros_like(p) for p in self.params]
+        self.exp_avg_sq = [torch.zeros_like(p) for p in self.params]
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        self.step_count += 1
+
+        for p, m, v in zip(
+            self.params,
+            self.exp_avg,
+            self.exp_avg_sq,
+            strict=True,
+        ):
+            if p.grad is None:
+                continue
+
+            grad = p.grad
+            if self.weight_decay > 0:
+                grad = grad.add(p, alpha=self.weight_decay)
+
+            m.mul_(self.beta1).add_(grad, alpha=1 - self.beta1)
+            v.mul_(self.beta2).addcmul_(grad, grad, value=1 - self.beta2)
+
+            bias_correction1 = 1 - pow(self.beta1, self.step_count)
+            bias_correction2 = 1 - pow(self.beta2, self.step_count)
+
+            m_hat = m / bias_correction1
+            v_hat = v / bias_correction2
+
+            p.addcdiv_(m_hat, v_hat.sqrt() + self.eps, value=-self.lr)
+```
+
+`exp_avg` stores $m_t$, `exp_avg_sq` stores $v_t$, and `step_count` supplies $t$ for the two bias-correction factors. `zero_grad()` clears each parameter's `.grad`; it must not clear Adam's moving averages, which persist across steps.
+
+The implementation can be checked on an anisotropic quadratic whose optimum is $(2, -1)$:
+
+```{python}
+def loss_fn(theta: Tensor) -> Tensor:
+    x, y = theta[0], theta[1]
+    return 0.1 * (x - 2) ** 2 + 2.0 * (y + 1) ** 2
+
+
+theta = torch.tensor([-5.0, 2.0], requires_grad=True)
+optimizer = Adam([theta], lr=0.25)
+history = dopt.run_optimizer(optimizer, loss_fn, steps=40)
+
+print('Final theta:', history[-1])
+print('Final loss:', loss_fn(history[-1]).item())
+```
+
+```{python}
+x = torch.linspace(-6.5, 5.5, 200)
+y = torch.linspace(-3.5, 2.5, 200)
+X, Y = torch.meshgrid(x, y, indexing='ij')
+Z = 0.1 * (X - 2) ** 2 + 2.0 * (Y + 1) ** 2
+
+fig = plt.figure(1)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels=25, cmap='YlGnBu')
+ax.plot(
+    history[:, 0],
+    history[:, 1],
+    color='#EC705B',
+    marker='o',
+    markersize=3,
+    markerfacecolor='#C0392B',
+    markeredgecolor='white',
+    markeredgewidth=0.5,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.set_title('Adam Optimization Trajectory')
+plt.show()
+```
+
+The resulting trajectory converges toward $(2, -1)$, confirming the implementation on this controlled example.
+
+## 4.5.6 Why Adam Is Commonly Used
+
+Adam is common because it is a practical baseline, not because it is theoretically optimal in every setting. Its adaptive scaling often reduces sensitivity to the initial learning rate compared with SGD, which typically requires more careful learning-rate tuning and scheduling. The second-moment estimate accommodates gradient-scale differences across layers and parameters, while the first moment smooths mini-batch noise.
+
+These properties make Adam or AdamW a frequent default for Transformers, generative models, and reinforcement learning. The costs are concrete: a model with $P$ parameters requires roughly another $2P$ state values for $m_t$ and $v_t$, increasing memory consumption. Adaptive updates can also affect generalization; SGD with momentum can perform better in some vision fine-tuning settings. Adam is therefore useful for establishing a training baseline, but optimization and generalization should still be compared empirically.
+
+## 4.5.7 What Adam Still Lacks
+
+Adam's interaction with weight decay is the remaining issue. For SGD, adding an L2 penalty gives
+
+```math
+L_{\text{reg}}(\theta) = L(\theta) + \frac{\lambda}{2}\|\theta\|_2^2
+```
+
+and changes the gradient to $g_t + \lambda\theta_t$. Substitution into SGD yields
+
+```math
+\theta_{t+1} = \theta_t - \eta(g_t + \lambda \theta_t) = (1 - \eta\lambda)\theta_t - \eta g_t
+```
+
+Thus L2 regularization and direct weight decay are equivalent for basic SGD: each step multiplies the parameters by $1 - \eta\lambda$ in addition to the gradient update.
+
+Adam behaves differently because it first sends the gradient through both moment estimators. If the regularization term is inserted into the gradient,
+
+```math
+g_t \leftarrow g_t + \lambda \theta_t
+```
+
+then $\lambda\theta_t$ enters both $m_t$ and $v_t$ and is rescaled by $\sqrt{\hat v_t} + \epsilon$. The effective decay consequently depends on the parameter's gradient history, although weight decay should depend only on parameter magnitude, learning rate, and the decay coefficient.
+
+AdamW [@loshchilov2019AdamW] decouples the operations. It applies the Adam gradient update and parameter decay separately:
+
+```math
+\theta_{t+1} = (1 - \eta\lambda)\theta_t - \eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+```
+
+Adam therefore controls gradient-based optimization, while weight decay independently shrinks the parameters. This cleaner interpretation is why AdamW is generally preferred over Adam with coupled weight decay for Transformers, ViTs, and LLMs.
+
+## 4.5.8 Summary
+
+Adam combines a first-moment estimate $m_t$ for smoothing gradient direction with a second-moment estimate $v_t$ for parameter-wise scaling. Because both estimates start at zero, it corrects their initialization bias:
+
+```math
+\hat{m}_t = \frac{m_t}{1 - \beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1 - \beta_2^t}
+```
+
+The update is
+
+```math
+\theta_{t+1} = \theta_t - \eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+```
+
+Adam usually trains stably, is relatively tolerant of the initial learning rate, and handles heterogeneous gradient scales. It also stores two additional tensors per parameter and does not guarantee better generalization than SGD. Its coupling with weight decay changes the meaning of regularization; the next section addresses this with AdamW's decoupled weight decay.
