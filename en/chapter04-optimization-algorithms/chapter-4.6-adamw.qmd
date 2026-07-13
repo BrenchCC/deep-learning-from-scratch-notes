@@ -1,0 +1,427 @@
+---
+author: Brench  
+date: 2026-07-13
+date-modified: 2026-07-13
+open-graph:
+  title: chapter 4.6-adamw
+  description: "4.6 AdamW: Decoupled Weight Decay"
+title: "Chapter 4.6 AdamW: Decoupled Weight Decay"
+order: 6
+---
+
+The previous section showed how Adam combines momentum with RMSprop. It maintains a first-moment estimate $m_t$ to smooth the update direction and a second-moment estimate $v_t$ to scale the step size for each parameter:
+
+```math
+\begin{aligned}
+m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t \\
+v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2 \\
+\hat{m}_t &= \frac{m_t}{1 - \beta_1^t} \\
+\hat{v}_t &= \frac{v_t}{1 - \beta_2^t} \\
+\theta_t &= \theta_{t-1} - \eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+\end{aligned}
+```
+
+Section 4.1 introduced L2 regularization and weight decay. For SGD, adding an L2 penalty to the loss is equivalent to applying weight decay during the parameter update. This equivalence does not extend to adaptive optimizers such as Adam.
+
+L2 regularization modifies the objective:
+
+```math
+L_{\mathrm{reg}}(\theta) = L(\theta) + \frac{\lambda}{2}\|\theta\|_2^2
+```
+
+The added term penalizes large parameters because
+
+```math
+\nabla_\theta \left(\frac{\lambda}{2}\|\theta\|_2^2\right) = \lambda\theta
+```
+
+so the optimizer receives the gradient
+
+```math
+g_t + \lambda\theta_{t-1}
+```
+
+The original $g_t$ reduces the data loss, while $\lambda\theta_{t-1}$ pulls the parameters toward zero.
+
+Weight decay takes a different route. It leaves the loss unchanged and directly shrinks the parameters during each update:
+
+```math
+\theta_t = (1 - \eta\lambda)\theta_{t-1} - \eta g_t
+```
+
+It is therefore an **optimizer-level regularization** mechanism: the update rule multiplies the parameters by a factor smaller than one.
+
+- L2 regularization adds a penalty to the loss and changes the gradient.
+- Weight decay scales the parameters directly in the optimizer update.
+
+These forms are equivalent for ordinary SGD. Adam, however, computes first and second moments and uses them to scale its update adaptively. If an L2 term is added to Adam's gradient, that term enters both moment estimates and is reweighted by the adaptive learning rate. The resulting parameter shrinkage is no longer independent or uniform.
+
+This raises a precise question:
+
+> **When using an adaptive optimizer such as Adam, does adding L2 regularization to the gradient still produce stable, uniform parameter decay?**
+
+AdamW [@loshchilov2019AdamW] answers by decoupling weight decay from Adam's gradient statistics.
+
+```{python}
+from collections.abc import Iterable
+
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch import Tensor
+from typing_extensions import override
+
+plt.rc('figure', dpi = 100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.6.1 Why L2 Regularization and Weight Decay Are Equivalent in SGD
+
+Without L2 regularization, SGD updates parameters as
+
+```math
+\theta_t = \theta_{t-1} - \eta g_t
+```
+
+Adding an L2 penalty changes the gradient to $g_t + \lambda\theta_{t-1}$:
+
+```math
+\theta_t = \theta_{t-1} - \eta (g_t + \lambda\theta_{t-1})
+```
+
+Expanding the expression gives
+
+```math
+\theta_t = (1 - \eta\lambda)\theta_{t-1} - \eta g_t
+```
+
+This update has two parts. First, shrink the parameters:
+
+```math
+\theta_{t-1} \rightarrow (1 - \eta\lambda)\theta_{t-1}
+```
+
+Second, apply the ordinary SGD update along $g_t$. Thus the following operations are equivalent for SGD:
+
+1. Add an L2 penalty to the loss.
+2. Apply weight decay in the parameter update.
+
+This equivalence explains why the two terms are sometimes used interchangeably. It relies on the optimizer using $g_t$ directly. Adam violates that assumption by maintaining first and second moments and scaling the update by $\sqrt{\hat{v}_t}$.
+
+## 4.6.2 Why the Equivalence Breaks in Adam
+
+Adam does not directly apply
+
+```math
+\theta_t = \theta_{t-1} - \eta g_t
+```
+
+It first incorporates the gradient into its moment estimates. With L2 regularization, the gradient becomes
+
+```math
+g_t^{\text{reg}} = g_t + \lambda \theta_{t-1}
+```
+
+and the states are updated with this modified gradient:
+
+```math
+\begin{aligned}
+m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t^{\mathrm{reg}} \\
+v_t &= \beta_2 v_{t-1} + (1 - \beta_2) (g_t^{\mathrm{reg}})^2
+\end{aligned}
+```
+
+The problem is that the regularization term now affects the moment estimates. Under SGD, $\lambda\theta$ simply pulls a parameter toward zero. Under Adam, it is also transformed by the adaptive scaling mechanism.
+
+If a parameter has a large second moment $v_t$, division by $\sqrt{v_t}$ weakens the effective decay. A parameter with a small second moment receives relatively stronger decay. Parameter shrinkage therefore depends on gradient history rather than remaining uniform. AdamW separates these two operations.
+
+## 4.6.3 AdamW: Decoupling Parameter Decay from Gradient Updates
+
+The W in AdamW stands for weight decay. Its rule is direct:
+
+> **Do not add weight decay to the gradient; apply it directly to the parameters.**
+
+AdamW does not add $\lambda\theta$ to $g_t$. Its moments depend only on the original gradient:
+
+```math
+\begin{aligned}
+m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t \\
+v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^2
+\end{aligned}
+```
+
+After bias correction, the adaptive direction remains
+
+```math
+\frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+```
+
+The parameter update includes a separate decay term:
+
+```math
+\theta_t = \theta_{t-1} -
+\eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon} -
+\eta\lambda\theta_{t-1}
+```
+
+Equivalently,
+
+```math
+\theta_t = (1 - \eta\lambda)\theta_{t-1} -
+\eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+```
+
+This has the same decay form as SGD: multiply the parameters by a decay factor, then apply Adam's adaptive update. AdamW changes neither moment estimate; it changes how weight decay enters the optimizer.
+
+## 4.6.4 Adam versus AdamW
+
+Adam with an L2 penalty first changes the gradient:
+
+```math
+g_t^{\mathrm{reg}} = g_t + \lambda\theta_{t-1}
+```
+
+It then updates its states with that gradient:
+
+```math
+m_t \leftarrow \mathrm{EMA}(g_t^{\mathrm{reg}}),
+\quad v_t \leftarrow \mathrm{EMA}((g_t^{\mathrm{reg}})^2)
+```
+
+The regularization term therefore enters both moments. AdamW leaves the gradient unchanged:
+
+```math
+g_t^{\text{adam}} = g_t
+```
+
+Its states depend only on the original gradient:
+
+```math
+m_t \leftarrow \mathrm{EMA}(g_t),
+\quad v_t \leftarrow \mathrm{EMA}(g_t^2)
+```
+
+Weight decay then acts directly on the parameters:
+
+```math
+\theta_t \leftarrow (1 - \eta\lambda)\theta_{t-1} -
+\eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}
+```
+
+The distinction is whether the penalty enters the gradient and is adaptively scaled, or acts as uniform parameter decay. The W in AdamW emphasizes this handling of weight decay.
+
+## 4.6.5 A PyTorch Implementation of AdamW
+
+The following is a simplified AdamW implementation.
+
+```{python}
+class AdamW(dopt.Optimizer):
+    def __init__(
+        self,
+        params: Iterable[Tensor],
+        lr: float = 1e-3,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 1e-2,
+    ):
+        """Initialize the simplified AdamW optimizer.
+
+        Args:
+            params: Parameters to optimize.
+            lr: Learning rate.
+            betas: Decay rates for the first and second moments.
+            eps: Numerical stability term.
+            weight_decay: Decoupled weight decay coefficient.
+        """
+        super().__init__(params)
+        self.lr = lr
+        self.beta1 = betas[0]
+        self.beta2 = betas[1]
+        self.eps = eps
+        self.weight_decay = weight_decay
+
+        self.step_count = 0
+        self.first_moments = [torch.zeros_like(p) for p in self.params]
+        self.second_moments = [torch.zeros_like(p) for p in self.params]
+
+    @override
+    @torch.no_grad()
+    def step(self):
+        """Apply one AdamW update to all parameters with gradients."""
+        self.step_count += 1
+
+        for p, m, v in zip(
+            self.params,
+            self.first_moments,
+            self.second_moments,
+            strict = True,
+        ):
+            if p.grad is None:
+                continue
+
+            # Decoupled weight decay: directly shrink parameters.
+            grad = p.grad
+            if self.weight_decay > 0:
+                p.mul_(1 - self.lr * self.weight_decay)
+
+            m.mul_(self.beta1).add_(grad, alpha = 1 - self.beta1)
+            v.mul_(self.beta2).addcmul_(grad, grad, value = 1 - self.beta2)
+
+            bias_correction1 = 1 - pow(self.beta1, self.step_count)
+            bias_correction2 = 1 - pow(self.beta2, self.step_count)
+
+            m_hat = m / bias_correction1
+            v_hat = v / bias_correction2
+
+            # Adam update: use the original gradient statistics.
+            p.addcdiv_(m_hat, v_hat.sqrt() + self.eps, value = -self.lr)
+```
+
+The main difference from Adam is
+
+```python
+p.mul_(1 - self.lr * self.weight_decay)
+```
+
+This statement directly shrinks each parameter instead of adding `weight_decay * p` to `grad`. Consequently, `weight_decay` does not affect either moment; `m` and `v` depend only on the current mini-batch gradient.
+
+The following two-dimensional quadratic objective checks the basic training behavior.
+
+```{python}
+def loss_fn(theta: Tensor) -> Tensor:
+    """Compute the quadratic objective.
+
+    Args:
+        theta: Two-dimensional parameter vector.
+    """
+    x, y = theta[0], theta[1]
+    return 0.1 * (x - 2) ** 2 + 2.0 * (y + 1) ** 2
+
+
+theta = torch.tensor([-5.0, 2.0], requires_grad = True)
+optimizer = AdamW([theta], lr = 0.25, weight_decay = 0.0)
+history = dopt.run_optimizer(optimizer, loss_fn, steps = 40)
+
+print('Final theta:', history[-1])
+print('Final loss:', loss_fn(history[-1]).item())
+```
+
+Plot the trajectory in parameter space:
+
+```{python}
+x = torch.linspace(-6.5, 5.5, 200)
+y = torch.linspace(-3.5, 2.5, 200)
+X, Y = torch.meshgrid(x, y, indexing = 'ij')
+Z = 0.1 * (X - 2) ** 2 + 2.0 * (Y + 1) ** 2
+
+fig = plt.figure(1)
+ax = fig.add_subplot(1, 1, 1)
+ax.contourf(X, Y, Z, levels = 25, cmap = 'YlGnBu')
+ax.plot(
+    history[:, 0],
+    history[:, 1],
+    color = '#EC705B',
+    marker = 'o',
+    markersize = 3,
+    markerfacecolor = '#C0392B',
+    markeredgecolor = 'white',
+    markeredgewidth = 0.5,
+)
+ax.set_xlabel(r'$\theta_1$')
+ax.set_ylabel(r'$\theta_2$')
+ax.set_title('AdamW Optimization Trajectory')
+plt.show()
+```
+
+The run should move the parameters from $(-5.0, 2.0)$ toward the optimum $(2.0, -1.0)$. This example checks only the basic update behavior; it does not compare the effect of weight decay on generalization.
+
+PyTorch exposes AdamW through `optim.AdamW`:
+
+```{python}
+model = nn.Linear(1, 1)
+optimizer = optim.AdamW(
+    model.parameters(),
+    lr = 1e-3,
+    weight_decay = 1e-2,
+)
+```
+
+The training loop still consists of clearing gradients, backpropagation, and an optimizer step:
+
+```{python}
+x = torch.randn(32, 1)
+y = 2 * x + 1
+
+pred = model(x)
+loss = F.mse_loss(pred, y)
+
+optimizer.zero_grad()
+loss.backward()
+optimizer.step()
+
+print('Loss:', loss.item())
+```
+
+## 4.6.6 Which Parameters Should Receive Weight Decay?
+
+Not every parameter should necessarily receive weight decay. A common configuration decays weight matrices while excluding biases and the parameters of LayerNorm or BatchNorm. Scale and shift parameters serve a different role from ordinary weight matrices, and shrinking them may hurt some training configurations. This exclusion is a convention to validate for a particular model, not a universal rule.
+
+Transformer, ViT, and LLM training code therefore often divides parameters into two groups:
+
+1. Parameters that receive weight decay.
+2. Parameters that do not receive weight decay.
+
+PyTorch parameter groups express this distinction:
+
+```{python}
+weight_decay_params = []
+no_weight_decay_params = []
+
+for name, param in model.named_parameters():
+    if not param.requires_grad:
+        continue
+
+    if name.endswith('bias') or 'norm' in name.lower():
+        no_weight_decay_params.append(param)
+    else:
+        weight_decay_params.append(param)
+
+optimizer = optim.AdamW(
+    [
+        {'params': weight_decay_params, 'weight_decay': 1e-2},
+        {'params': no_weight_decay_params, 'weight_decay': 0.0},
+    ],
+    lr = 1e-3,
+)
+```
+
+This example excludes biases and parameters whose names contain `norm`. Production code should preferably group parameters by module type or an explicit parameter list so that naming conventions do not silently omit parameters.
+
+## 4.6.7 Why AdamW Is Common in Modern Deep Learning
+
+AdamW is widely used for Transformer and ViT models. It retains Adam's main properties:
+
+1. A first moment smooths noisy gradients.
+2. A second moment scales steps adaptively across parameters.
+3. Training is usually less sensitive to the initial learning-rate choice than plain SGD.
+
+AdamW also removes weight decay from adaptive gradient scaling. The learning rate controls the adaptive update magnitude, while weight decay controls parameter shrinkage, making the two hyperparameters easier to interpret. The decay term still contains the learning rate $\eta$, so they are not numerically independent.
+
+AdamW still requires suitable learning rates, betas, warmup, and scheduling. Transformer training commonly pairs it with learning-rate warmup followed by cosine or linear decay. These combinations are training-strategy choices and will be discussed in a later optimizer-practice section.
+
+## 4.6.8 Summary
+
+For SGD, adding an L2 penalty to the loss and applying weight decay in the update are equivalent because $\lambda\theta$ directly produces uniform parameter shrinkage.
+
+For Adam, an L2 term added to the gradient also enters the first- and second-moment estimates and is reweighted by adaptive scaling. It no longer behaves as an independent, uniform decay operation.
+
+AdamW decouples weight decay. Its moments depend only on the original gradient, while decay acts directly on the parameters. This distinction makes the roles of the learning rate and weight decay clearer, even though the decay magnitude still depends on the learning rate.
+
+The optimizer progression in this chapter is now explicit: SGD uses the current gradient; momentum accumulates historical direction; Adagrad and RMSprop adjust parameter-wise effective learning rates; Adam combines directional smoothing with adaptive scaling; and AdamW removes weight decay from Adam's gradient statistics.
+
+The next section turns to Muon, which focuses on the update direction of matrix-valued parameters rather than only adjusting a scalar learning rate for each coordinate.
