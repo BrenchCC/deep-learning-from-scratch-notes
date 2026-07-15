@@ -1,0 +1,301 @@
+---
+author: Brench
+date: 2026-07-14
+date-modified: 2026-07-14
+open-graph:
+  title: chapter 4.8-optimizer-practice
+  description: "4.8 Optimizer Map: When to Use Which Optimization Algorithm"
+title: "Chapter 4.8 Optimizer Map: When to Use Which Optimization Algorithm"
+order: 8
+---
+
+The preceding sections introduced SGD, momentum, Adagrad, RMSprop, Adadelta, Adam, AdamW, and Muon.
+
+Their update equations can blur together: some maintain momentum, some track squared gradients, some apply weight decay, and some orthogonalize matrix updates. In practice, the first question is more direct:
+
+> **Which optimizer should I try first for the model I am training?**
+
+This section does not derive another update rule. It compares common optimizers by mechanism, state cost, and intended use, then gives a task-oriented selection order: when to start with AdamW, when to consider SGD with momentum, and which constraints motivate Adagrad, SparseAdam, Adafactor, LBFGS, or Muon.
+
+Optimizer performance also depends on model architecture, dataset size, batch size, learning-rate schedule, weight decay, training duration, and implementation details. The result is therefore a testable default order, not a universal answer detached from the rest of the training configuration.
+
+## 4.8.1 Overview of PyTorch Optimizers
+
+PyTorch's `torch.optim` package includes SGD, Adam, AdamW, RMSprop, Adagrad, Adadelta, SparseAdam, Adamax, NAdam, RAdam, Adafactor, LBFGS, Rprop, ASGD, Muon, and other optimizers.
+
+Framework support does not imply that an optimizer is a suitable default for modern deep learning.
+
+SGD with momentum, Adam, and AdamW occur frequently in CNN, Transformer, ViT, and LLM training configurations. Adagrad, SparseAdam, Adafactor, and LBFGS have narrower conditions: Adagrad targets sparse features, SparseAdam targets sparse gradients, Adafactor reduces state storage for large matrix parameters, and LBFGS supports small full-batch problems that benefit from precise optimization.
+
+Adamax, NAdam, and RAdam each have a clear algorithmic motivation, but most modern training recipes do not use them as the first choice.
+
+The following table summarizes the roles of the optimizers discussed in this chapter and available in PyTorch.
+
+::: {.list-table}
+Table 1: Comparison of common PyTorch optimizers
+
+- - Optimizer
+  - Core idea
+  - Additional state cost
+  - Suitable use
+  - Recommended as a primary default?
+
+- - SGD
+  - Follow the negative gradient directly
+  - None
+  - Starting point for optimization; simple baseline
+  - Essential for teaching; normally paired with momentum in practice
+
+- - SGD + momentum
+  - Apply an exponential moving average to gradient directions to add inertia
+  - About one parameter copy
+  - CNNs, classical vision models, and training with lower state cost
+  - Common, especially in vision
+
+- - Nesterov momentum
+  - Look ahead along the momentum direction before computing the correction
+  - About one parameter copy
+  - A momentum variant used by some vision recipes
+  - Optional, not a required default
+
+- - Adagrad
+  - Accumulate historical squared gradients and scale each parameter's learning rate
+  - About one parameter copy
+  - Sparse features, online learning, and early recommendation-system settings
+  - Useful in specific settings
+
+- - RMSprop
+  - Replace Adagrad's complete accumulation with a moving average of squared gradients
+  - About one parameter copy
+  - RNNs, reinforcement learning, and adaptive optimization predating Adam
+  - Less common as a default today
+
+- - Adadelta
+  - Extend RMSprop by also using the scale of historical updates
+  - About two parameter copies
+  - Historically important attempts to reduce learning-rate tuning
+  - Not an early candidate
+
+- - Adam
+  - First-moment momentum with adaptive second-moment scaling
+  - About two parameter copies
+  - General deep-learning training and older default configurations
+  - Common, though modern training often starts with AdamW
+
+- - AdamW
+  - Adam with decoupled weight decay
+  - About two parameter copies
+  - Transformers, ViTs, LLMs, and fine-tuning
+  - One of the main modern defaults
+
+- - Adamax
+  - An infinity-norm variant of Adam
+  - About two parameter copies
+  - An Adam-paper variant and occasional experimental comparison
+  - Usually sufficient to recognize
+
+- - NAdam
+  - Adam with Nesterov momentum
+  - About two parameter copies
+  - Experiments with a Nesterov variant of Adam
+  - Usually sufficient to recognize
+
+- - RAdam
+  - Rectify the high variance of Adam's early adaptive learning rates
+  - About two parameter copies
+  - A candidate when warmup cannot be tuned precisely
+  - Useful as an Adam variant
+
+- - SparseAdam
+  - A masked Adam update for sparse gradients
+  - Dense state tensors, updated only at nonzero-gradient positions
+  - Sparse embeddings and parameters with sparse gradients
+  - A specialized tool
+
+- - Adafactor
+  - Factor second moments into row and column statistics to reduce state memory
+  - Matrix second moments approximated by row and column vectors
+  - Large Transformers, large matrix parameters, and memory-constrained training
+  - Worth considering for large models
+
+- - LBFGS
+  - Use a limited history to approximate second-order curvature
+  - Multiple history vectors
+  - Small models, full-batch optimization, style transfer, and precise fitting
+  - A specialized tool
+
+- - Rprop
+  - Adjust each parameter's step size using only the gradient sign
+  - About one parameter copy
+  - Early full-batch neural-network training
+  - Rare in modern mini-batch training
+
+- - ASGD
+  - Average the parameter trajectory of SGD
+  - Low
+  - Classical stochastic optimization, convex problems, and some shallow models
+  - Not a mainstream deep-learning choice
+
+- - Muon
+  - Orthogonalize momentum updates for matrix parameters
+  - About one parameter copy plus Newton-Schulz computation
+  - Two-dimensional hidden-layer weights, especially Transformer and MLP matrices
+  - A newer direction suited to controlled experiments
+:::
+
+The table suggests the following selection order:
+
+- If there is no clear starting point, use AdamW.
+- For a classical CNN baseline, use SGD with momentum or AdamW.
+- For sparse features or sparse gradients, consider Adagrad or SparseAdam.
+- If optimizer states create a large-model memory bottleneck, consider Adafactor.
+- For precise optimization of a small full-batch problem, consider LBFGS.
+- To test a modern matrix optimizer, compare a Muon and AdamW split against an AdamW baseline.
+
+The next sections explain the evidence and limits behind these choices.
+
+## 4.8.2 The Most Common Modern Default: AdamW
+
+When training a Transformer, ViT, or most pretrained models that require fine-tuning, AdamW is usually a reliable starting point. The reasons concern both optimization stability and the implementation of weight decay.
+
+AdamW uses a first moment to smooth the gradient direction and a second moment to scale each parameter's effective learning rate. Compared with plain SGD, it is often easier to start on large models whose gradient scales differ substantially, although it still requires a suitable learning rate and warmup.
+
+AdamW also decouples weight decay from Adam's gradient update. L2 regularization and weight decay can be equivalent under ordinary SGD, but they are not equivalent under an adaptive optimizer such as Adam. AdamW applies parameter shrinkage as a separate step, keeping it out of the first- and second-moment estimates.
+
+Modern training commonly uses the following combination:
+
+```text
+AdamW + weight decay + warmup + cosine decay / linear decay
+```
+
+This configuration is common for Transformers and ViTs. The original Transformer used Adam with warmup and learning-rate decay. Training recipes for BERT, ViT, CLIP, MAE, and LLM fine-tuning often use AdamW or an equivalent form of decoupled weight decay.
+
+A practical default is therefore:
+
+> **If there is no specific reason to use another optimizer, start with AdamW.**
+
+Tune the learning rate, weight decay, warmup ratio, and scheduler before changing optimizers. If multiple training variables change together, it becomes difficult to identify the source of a performance difference.
+
+## 4.8.3 Classical Vision Models: SGD with Momentum Still Matters
+
+AdamW is one modern default, but SGD with momentum remains an important baseline for classical vision models.
+
+Many training configurations for ResNet, VGG, DenseNet, and related CNNs use SGD with momentum, weight decay, and a decaying learning rate. A classical ImageNet recipe often resembles
+
+```text
+SGD + momentum=0.9 + weight_decay=1e-4 + step / cosine learning rate schedule
+```
+
+SGD with momentum has lower state cost, a simple update rule, and a large body of established practice in conventional image classification. It is usually more sensitive to learning rate, scheduler, and training duration; an untuned learning rate can make it harder to start than AdamW.
+
+For vision tasks, the model architecture and available recipe provide a useful selection rule:
+
+- For a classical CNN baseline, SGD with momentum is a strong choice.
+- For a ViT or another Transformer-style vision model, AdamW is usually more natural.
+- When fine-tuning a large vision model, either AdamW or SGD may work, depending on the recipe.
+
+Vision fine-tuning studies often compare SGD and AdamW because their state costs and tuning conventions differ. Any claim about generalization must still be evaluated for the specific model, training budget, and dataset rather than inferred from the optimizer name.
+
+## 4.8.4 Sparse Features and Sparse Gradients: Adagrad and SparseAdam
+
+Adagrad is not a general default, but it has a clear role for sparse features.
+
+Adagrad accumulates historical squared gradients for each parameter. Frequently updated parameters acquire a larger accumulator and a smaller effective learning rate. Rarely updated parameters accumulate more slowly and retain a larger effective learning rate.
+
+This behavior is useful in recommendation systems, click-through-rate prediction, bag-of-words models, and some sparse-embedding settings, where many features are absent from most batches. With a shared learning rate, rare features may learn slowly; Adagrad preserves a larger update when they occur. One motivation of the original Adagrad work was to exploit historical gradient geometry in sparse problems.
+
+SparseAdam [@kingma2017Adam] requires gradients with a sparse layout; it does not require sparse model parameters. A typical case is `nn.Embedding(sparse=True)`, where only the embedding rows used by the current batch receive nonzero gradients. PyTorch's SparseAdam uses dense parameters and dense state tensors, but it updates parameters and moment estimates only at nonzero-gradient positions. It is therefore better understood as masked Adam than as Adam with fully sparse storage.
+
+The distinction gives a direct selection rule:
+
+- For highly sparse input features, consider Adagrad.
+- For parameter gradients represented as sparse tensors, consider SparseAdam.
+- For an ordinary dense neural network, neither is usually an early candidate.
+
+## 4.8.5 RMSprop and Adadelta: Steps Toward Adam
+
+RMSprop and Adadelta both modify Adagrad to address its continuously decaying effective learning rate.
+
+Adagrad's squared-gradient accumulator only increases, so its effective learning rate can become very small. RMSprop replaces the complete sum with an exponential moving average, allowing old gradients to decay. Hinton's early description of RMSprop uses a running average of recent gradient magnitudes to scale each weight's learning rate.
+
+Adadelta addresses the same decay problem and also attempts to reduce dependence on a manually selected global learning rate. Zeiler describes it as a per-dimension learning-rate method that uses first-order information with modest additional cost.
+
+Neither is normally a default today.
+
+RMSprop still appears in some reinforcement-learning systems, RNNs, and older code. Adadelta is now more useful for understanding the progression of adaptive optimizers. Together with momentum, they identify Adam's two main components:
+
+- Momentum supplies smoothed first-order directions.
+- RMSprop supplies second-moment scale adjustment.
+- Adam combines first-moment momentum with second-moment scaling.
+
+Unless an established recipe or a specific failure mode points to them, RMSprop and Adadelta need not be tried first.
+
+## 4.8.6 Memory Pressure in Large Models: Adafactor
+
+AdamW's first- and second-moment states can consume substantial memory.
+
+For every parameter, AdamW normally stores $m_t$ and $v_t$. With billions of parameters, optimizer states alone occupy significant memory. Even when parameters use mixed precision, optimizer states can remain a major part of the training footprint.
+
+Adafactor approximates the full second moment of a matrix parameter with row and column statistics. This changes the storage for that state from scaling with the number of matrix elements to scaling with the sum of its row and column counts. Vector parameters still require an unfactored second moment. Experiments in the Adafactor paper [@shazeer2018Adafactor] show that it can reduce auxiliary optimizer storage in Transformer training while obtaining results comparable to Adam.
+
+Adafactor therefore addresses an optimizer-state bottleneck for large matrix parameters. A small MLP or CNN usually does not need it, since AdamW has more mature implementations and tuning practice. Its advantage becomes concrete when optimizer states are a memory bottleneck.
+
+## 4.8.7 LBFGS: Precise Optimization at Small Scale
+
+LBFGS differs from the preceding first-order optimizers. It is a quasi-Newton method that stores a limited history of gradients and parameter changes to approximate curvature information.
+
+Modern large-scale training relies on noisy mini-batch gradients, while LBFGS is better suited to stable full-batch or small optimization problems. It is consequently not a default for large neural networks.
+
+In PyTorch, LBFGS appears in specialized tasks such as style transfer, physics-informed neural networks, and precise fitting of a small parameter set.
+
+The practical boundary is:
+
+- Large-scale neural-network training normally does not use LBFGS.
+- A small model with a smooth full-batch objective may benefit from LBFGS.
+- LBFGS can work well when optimizing an input or a small number of parameters precisely.
+
+One LBFGS step may evaluate the objective and gradients multiple times. PyTorch's `step()` therefore accepts a `closure()` that recomputes the loss and gradients. This control flow differs from an ordinary training loop and further limits its use in large-scale training.
+
+## 4.8.8 Adam Variants: Adamax, NAdam, and RAdam
+
+Several variants followed Adam. Common PyTorch implementations include Adamax, NAdam, and RAdam.
+
+Adamax [@kingma2017Adam] is the infinity-norm variant introduced in the original Adam paper. Its derivation is clear, but modern training recipes rarely use it as a default.
+
+NAdam [@dozat2016NAdam] combines Adam with Nesterov momentum. The motivation is straightforward: if momentum can look ahead with a Nesterov update, Adam's first moment can adopt a related mechanism. In many modern settings, however, NAdam has not consistently displaced Adam or AdamW.
+
+RAdam [@liu2020RAdam] attempts to rectify the high variance of adaptive learning rates early in Adam training. The RAdam paper argues that warmup stabilizes Adam and RMSprop partly because their adaptive learning rates have high initial variance, then introduces a rectification term to address it.
+
+These variants are candidates for specific failure modes rather than unconditional replacements for AdamW:
+
+- Start with AdamW and a suitable warmup and scheduler.
+- If early training remains unstable, evaluate a variant such as RAdam.
+- Treat Adamax and NAdam primarily as additional members of the Adam family unless an established recipe calls for them.
+
+## 4.8.9 Muon: A Modern Direction for Matrix Optimization
+
+Muon takes a matrix-level approach that differs from AdamW, RMSprop, and Adagrad.
+
+The adaptive optimizers discussed above adjust each parameter's effective learning rate from historical gradient statistics. Muon instead computes a momentum update, approximately orthogonalizes each two-dimensional update matrix with Newton-Schulz iterations, and applies the transformed direction to the parameter.
+
+Muon primarily targets two-dimensional hidden-layer weights, especially large matrices in Transformers and MLPs. Biases, normalization parameters, embeddings, and other non-two-dimensional parameters are outside its intended parameter set and must be assigned to a standard optimizer such as AdamW.
+
+An experiment with Muon should retain an AdamW baseline, record the parameter split explicitly, and compare convergence, final task metrics, memory use, and step time under the same training budget. Faster reduction of training loss alone does not establish an advantage over AdamW on the target task.
+
+## 4.8.10 Chapter Summary
+
+This chapter started from gradient descent and examined the main design paths for neural-network parameter updates.
+
+SGD follows mini-batch gradients; momentum accumulates historical directions; Adagrad, RMSprop, and Adadelta assign different effective learning rates to parameters; Adam combines first-moment momentum with second-moment scaling; AdamW decouples weight decay from the adaptive update; and Muon applies a matrix-level transformation to updates for two-dimensional parameters.
+
+Optimizer selection begins with the constraint that the optimizer must address:
+
+```text
+What is the model architecture?
+Are the gradients dense or sparse?
+Where is the memory bottleneck?
+Is there an established training recipe?
+Are the learning rate, weight decay, and scheduler already reasonable?
+```
+
+Without a special constraint, start with AdamW. For a classical CNN, also establish an SGD-with-momentum baseline. Sparse gradients, optimizer-state memory, full-batch precise fitting, and two-dimensional matrix updates respectively motivate SparseAdam, Adafactor, LBFGS, and Muon. When changing optimizers, keep the rest of the training configuration as constant as possible and verify any benefit on the target-task metric.
