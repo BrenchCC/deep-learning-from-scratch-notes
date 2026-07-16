@@ -1,0 +1,579 @@
+---
+author: Brench
+date: 2026-07-15
+date-modified: 2026-07-15
+open-graph:
+  title: chapter 4.9-learning-rate-schedulers
+  description: "4.9 Learning Rate Schedulers: Controlling Learning Rate Dynamics During Training"
+title: "Chapter 4.9 Learning Rate Schedulers: Controlling Learning Rate Dynamics During Training"
+order: 9
+---
+
+The preceding sections treated the learning rate $\eta$ as an optimizer hyperparameter. Whether the optimizer is SGD, momentum, Adagrad, RMSprop, Adam, or AdamW, its parameter update contains some form of step size:
+
+```math
+\theta_{t+1} = \theta_t - \eta \cdot \mathrm{update}_t
+```
+
+Different optimizers construct $\mathrm{update}_t$ differently. Momentum smooths gradient directions, Adam combines first and second moments, and AdamW decouples weight decay from the gradient update.
+
+The optimizer rule does not answer another question:
+
+> **Must the learning rate remain constant throughout training?**
+
+A fixed learning rate often cannot satisfy the needs of every training stage. A large value can move parameters quickly but may repeatedly overshoot a low-loss region late in training. A small value supports finer updates but may make early optimization too slow. A learning rate scheduler explicitly controls this change.
+
+A scheduler does not alter the optimizer's update rule. It controls how the optimizer's learning rate changes during training.
+
+The optimizer answers:
+
+> **Given the current gradient and learning rate, how should the parameters be updated?**
+
+The scheduler answers:
+
+> **What should the learning rate be at this point in training?**
+
+This section compares the mechanisms, call frequencies, and intended uses of common schedules, then demonstrates their correct placement in PyTorch training loops.
+
+```{python}
+import dnnlpy
+import dnnlpy.optim as dopt
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.optim.lr_scheduler as lr
+
+plt.rc('figure', dpi = 100)
+dnnlpy.set_matplotlib_format('svg')
+print('PyTorch version:', torch.__version__)
+```
+
+## 4.9.1 Why Schedule the Learning Rate?
+
+A fixed learning rate has two common failure modes.
+
+- If the learning rate is too small, updates are stable but progress is slow.
+- If it is too large, loss may decrease quickly at first but oscillate later or diverge entirely.
+
+Most schedulers build on the following empirical pattern:
+
+> **Use a larger learning rate for rapid progress early in training and a smaller one for refinement later.**
+
+A CNN might start with `lr = 0.1` and later reduce it to 0.01 and then 0.001. The larger initial step accelerates optimization, while the smaller later steps reduce the amplitude of parameter oscillations.
+
+Transformer and ViT training often adds warmup: the learning rate rises from a small value before entering its decay phase, reducing the risk of applying the peak learning rate at the start of training.
+
+A learning rate scheduler therefore defines the trajectory of the optimization step size across epochs or optimization steps.
+
+## 4.9.2 Relationship Between Scheduler and Optimizer
+
+In PyTorch, a scheduler wraps an optimizer:
+
+```{python}
+model = nn.Linear(1, 1)
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.CosineAnnealingLR(
+    optimizer,
+    T_max = 100,
+)
+```
+
+The optimizer updates parameters. The scheduler modifies the learning rate in each optimizer parameter group.
+
+A scheduler does not replace
+
+```python
+optimizer.step()
+```
+
+The training loop must call
+
+```python
+scheduler.step()
+```
+
+at the appropriate time. A typical epoch-level schedule is stepped after each epoch:
+
+```python
+for epoch in range(num_epochs):
+    train_one_epoch(model, train_loader, optimizer)
+    scheduler.step()
+```
+
+A batch-level scheduler such as OneCycleLR is normally stepped after every mini-batch:
+
+```python
+for epoch in range(num_epochs):
+    for x, y in train_loader:
+        optimizer.zero_grad()
+        loss = compute_loss(model, x, y)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+```
+
+Before configuring a scheduler, determine:
+
+> **Is this scheduler stepped once per epoch or once per batch?**
+
+Schedulers expect different call frequencies. Calling an epoch-scale schedule after every batch changes the learning rate too quickly; calling a step-scale schedule after every epoch changes it too slowly. Except for `ReduceLROnPlateau`, which consumes a validation metric, `scheduler.step()` should also follow `optimizer.step()`. Reversing the order skips the first scheduled learning-rate value.
+
+## 4.9.3 Overview of Common Learning Rate Schedulers
+
+The table lists schedulers commonly encountered in PyTorch deep-learning training.
+
+::: {.list-table}
+Table 1: Comparison of common PyTorch learning rate schedulers
+
+- - Scheduler
+  - Core idea
+  - Suitable use
+  - Call frequency
+
+- - StepLR
+  - Multiply the learning rate by `gamma` after a fixed number of epochs
+  - Simple baselines and classical CNN training
+  - Usually once per epoch
+
+- - MultiStepLR
+  - Decay at specified milestones
+  - Classical vision recipes with fixed decay epochs
+  - Usually once per epoch
+
+- - ExponentialLR
+  - Multiply by a fixed `gamma` on every call
+  - Smooth exponential decay
+  - Usually once per epoch
+
+- - CosineAnnealingLR
+  - Follow a cosine curve from the initial rate to a smaller rate
+  - Transformers, ViTs, modern vision training, and fine-tuning
+  - Once per epoch or step, depending on `T_max`
+
+- - CosineAnnealingWarmRestarts
+  - Restart at a larger learning rate after each cosine decay cycle
+  - Periodic re-exploration of parameter space
+  - Usually once per epoch or more frequently
+
+- - ReduceLROnPlateau
+  - Reduce the learning rate when a validation metric stops improving
+  - Uncertain training length or metric-driven decay
+  - After each validation event
+
+- - OneCycleLR
+  - Raise and then lower the learning rate
+  - Fast training, super-convergence, and experiments with a strong schedule
+  - Once per batch
+
+- - CyclicLR
+  - Cycle the learning rate between lower and upper bounds
+  - Periodic learning-rate variation during training
+  - Once per batch
+
+- - LinearLR
+  - Increase or decrease the learning rate linearly
+  - Warmup or simple linear decay
+  - Once per epoch or step
+
+- - SequentialLR
+  - Apply multiple schedulers in consecutive stages
+  - Compositions such as warmup followed by cosine decay
+  - Determined by the child schedulers
+
+- - LambdaLR
+  - Define the schedule with a custom function
+  - Fully custom schedules
+  - Determined by the function design
+:::
+
+The training constraint gives an initial selection rule:
+
+```text
+For the simplest decay: StepLR / MultiStepLR.
+For smooth decay: CosineAnnealingLR.
+To decay only after validation stops improving: ReduceLROnPlateau.
+For warmup followed by decay: LinearLR + SequentialLR, or LambdaLR.
+For strong per-batch control: OneCycleLR.
+```
+
+## 4.9.4 StepLR and MultiStepLR: Decay at Fixed Positions
+
+Step decay multiplies the learning rate by a factor `gamma` smaller than one at predetermined positions.
+
+StepLR performs the decay at a fixed interval:
+
+```{python}
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.StepLR(
+    optimizer,
+    step_size = 25,
+    gamma = 0.1,
+)
+dopt.plot_lr_schedule(optimizer, scheduler, num_steps = 100)
+```
+
+This configuration reduces the learning rate to 10% of its previous value after every 25 calls. If the scheduler is called once per epoch and the initial learning rate is 1, the trajectory is
+
+```text
+1 -> 0.1 -> 0.01 -> 0.001
+```
+
+MultiStepLR does not require equal intervals. It decays at specified milestones:
+
+```{python}
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.MultiStepLR(
+    optimizer,
+    milestones = [30, 60, 90],
+    gamma = 0.2,
+)
+dopt.plot_lr_schedule(optimizer, scheduler, num_steps = 100)
+```
+
+This form is common in fixed-length CNN recipes whose decay positions are supported by established practice. It is simple and reproducible, but the milestones must be set in advance and do not adapt when validation behavior differs from expectations.
+
+## 4.9.5 ExponentialLR: Continuous Exponential Decay
+
+ExponentialLR multiplies the learning rate by the same factor `gamma` on every call:
+
+```{python}
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.ExponentialLR(
+    optimizer,
+    gamma = 0.95,
+)
+dopt.plot_lr_schedule(optimizer, scheduler, num_steps = 100)
+```
+
+If it is called once per epoch, the learning rate follows
+
+```math
+\eta_t = \eta_0 \cdot \gamma^t
+```
+
+ExponentialLR is smoother than StepLR and does not require multiple milestones. The value of `gamma` determines the decay timescale: a small value can drive the learning rate toward zero too early, while a value too close to one may not decay enough before training ends.
+
+## 4.9.6 CosineAnnealingLR: Smooth Decay to a Small Learning Rate
+
+Cosine annealing lowers the learning rate along a cosine curve, avoiding the discrete jumps of StepLR.
+
+PyTorch provides
+
+```{python}
+num_epochs = 100
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.CosineAnnealingLR(
+    optimizer,
+    T_max = num_epochs,
+    eta_min = 1e-6,
+)
+dopt.plot_lr_schedule(optimizer, scheduler, num_steps = num_epochs)
+```
+
+The learning rate decreases smoothly from its initial value to `eta_min`. This schedule is common in Transformer, ViT, and modern vision training, particularly when the total training length is known. `CosineAnnealingLR` does not restart by itself; use `CosineAnnealingWarmRestarts` when periodic restarts are required.
+
+The unit of `T_max` depends on the frequency of `scheduler.step()`.
+
+For an epoch-level call,
+
+```{python}
+num_epochs = 100
+scheduler = lr.CosineAnnealingLR(
+    optimizer,
+    T_max = num_epochs,
+)
+```
+
+`T_max` counts epochs. For a batch-level call,
+
+```{python}
+num_steps = num_epochs * 100  # Assuming 100 steps per epoch
+scheduler = lr.CosineAnnealingLR(
+    optimizer,
+    T_max = num_steps,
+)
+```
+
+it counts optimization steps. More precisely, `T_max` counts scheduler calls; it is not intrinsically an epoch count.
+
+## 4.9.7 ReduceLROnPlateau: Decay After a Metric Stalls
+
+StepLR, MultiStepLR, ExponentialLR, and CosineAnnealingLR follow predetermined trajectories without reading validation metrics. When the epoch at which validation loss will stall is unknown, a metric-driven schedule is an alternative.
+
+ReduceLROnPlateau is configured as follows:
+
+```{python}
+metric_values = np.random.rand(100)  # Simulated validation loss values
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.ReduceLROnPlateau(
+    optimizer,
+    mode = 'min',
+    factor = 0.1,
+    patience = 5,
+)
+dopt.plot_lr_schedule(
+    optimizer,
+    scheduler,
+    num_steps = 100,
+    metric_values = metric_values.tolist(),
+)
+```
+
+If the monitored metric fails to improve within the range specified by `patience`, the scheduler multiplies the learning rate by `factor`.
+
+It is normally stepped after validation:
+
+```python
+val_loss = evaluate(model, val_loader)
+scheduler.step(val_loss)
+```
+
+Ordinary schedulers generally require no metric:
+
+```python
+scheduler.step()
+```
+
+`ReduceLROnPlateau` instead consumes the current metric:
+
+```python
+scheduler.step(metric)
+```
+
+This approach is appropriate when training length is uncertain and validation reliably reflects progress. If the metric is noisy, `patience`, `threshold`, and validation frequency should be chosen to limit false triggers.
+
+## 4.9.8 Warmup: Increase the Learning Rate at the Start
+
+Warmup raises the learning rate from a small initial value to its peak before switching to a decay phase.
+
+Its practical motivation is
+
+> **Parameters, gradient distributions, and optimizer states have not stabilized at the start of training, so do not apply the peak learning rate immediately.**
+
+Adaptive optimizers such as AdamW have not accumulated stable moment estimates during their first few steps, and Transformer training can also produce large early updates. Warmup does not guarantee that these problems disappear, but it limits the impact of the peak learning rate at the start of training.
+
+LinearLR and SequentialLR can implement linear warmup followed by cosine decay:
+
+```{python}
+total_steps = 100
+warmup_steps = 10
+
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+warmup_scheduler = lr.LinearLR(
+    optimizer,
+    start_factor = 0.01,
+    end_factor = 1.0,
+    total_iters = warmup_steps,
+)
+cosine_scheduler = lr.CosineAnnealingLR(
+    optimizer,
+    T_max = total_steps - warmup_steps,
+    eta_min = 1e-6,
+)
+
+scheduler = lr.SequentialLR(
+    optimizer,
+    schedulers = [warmup_scheduler, cosine_scheduler],
+    milestones = [warmup_steps],
+)
+dopt.plot_lr_schedule(optimizer, scheduler, num_steps = total_steps)
+```
+
+The first `warmup_steps` calls use linear warmup, after which SequentialLR switches to cosine decay. Here, a “step” is still defined by the frequency of `scheduler.step()`.
+
+## 4.9.9 OneCycleLR: A Strong Rise-Then-Fall Schedule
+
+OneCycleLR [@smith2018SuperConvergence] implements the 1cycle policy: the learning rate rises to `max_lr` and then falls to a small value. PyTorch expects `scheduler.step()` to be called after every trained batch.
+
+```{python}
+num_epochs = 100
+num_steps = num_epochs * 100  # Assuming 100 steps per epoch
+
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.OneCycleLR(
+    optimizer,
+    max_lr = 1,
+    total_steps = num_steps,
+)
+dopt.plot_lr_schedule(
+    optimizer,
+    scheduler,
+    num_steps = num_steps,
+    xlabel = 'Step'
+)
+```
+
+The training loop normally uses
+
+```python
+for epoch in range(num_epochs):
+    for x, y in train_loader:
+        optimizer.zero_grad()
+        loss = compute_loss(model, x, y)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+```
+
+OneCycleLR is sensitive to `max_lr`, the total number of steps, and its batch-level call position. AdamW with cosine decay is generally easier to reproduce as a baseline. OneCycleLR should be evaluated while controlling other regularization settings because the original super-convergence work treats a large learning rate as a form of regularization.
+
+## 4.9.10 LambdaLR: Define a Schedule with a Function
+
+When built-in schedulers cannot express the required curve, LambdaLR accepts a callback that returns a multiplier relative to the initial learning rate.
+
+The following function implements linear warmup followed by linear decay:
+
+```{python}
+num_steps = 100
+num_warmup_steps = 10
+
+
+def lr_lambda(step: int) -> float:
+    if step < num_warmup_steps:
+        return step / max(1, num_warmup_steps)
+
+    return max(0.0, (num_steps - step) / max(1, num_steps - num_warmup_steps))
+
+
+optimizer = optim.AdamW(model.parameters(), lr = 1)
+scheduler = lr.LambdaLR(
+    optimizer,
+    lr_lambda = lr_lambda,
+)
+dopt.plot_lr_schedule(optimizer, scheduler, num_steps = num_steps)
+```
+
+LambdaLR is useful for reproducing a custom schedule from a paper or framework, but its boundary values, total length, and `last_epoch` behavior after checkpoint restoration must be tested. When a built-in scheduler expresses the target curve, the built-in implementation is easier to audit.
+
+## 4.9.11 Using a Scheduler in a PyTorch Training Loop
+
+The following examples compare three different call positions.
+
+For most epoch-level schedulers, including StepLR, ExponentialLR, and an epoch-scale CosineAnnealingLR, call the scheduler after the epoch's optimizer updates:
+
+```python
+num_epochs = 100
+
+model = nn.Linear(1, 1)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr = 1e-3,
+    weight_decay = 1e-2,
+)
+scheduler = lr.CosineAnnealingLR(
+    optimizer,
+    T_max = num_epochs,
+)
+
+for epoch in range(num_epochs):
+    model.train()
+    for x, y in train_loader:
+        optimizer.zero_grad()
+        pred = model(x)
+        loss = compute_loss(pred, y)
+        loss.backward()
+        optimizer.step()
+
+    scheduler.step()
+```
+
+For ReduceLROnPlateau, call the scheduler after validation and pass the monitored metric:
+
+```python
+num_epochs = 100
+
+scheduler = lr.ReduceLROnPlateau(
+    optimizer,
+    mode = 'min',
+    factor = 0.1,
+    patience = 5,
+)
+
+for epoch in range(num_epochs):
+    train_one_epoch(model, train_loader, optimizer)
+    val_loss = evaluate(model, val_loader)
+    scheduler.step(val_loss)
+```
+
+For OneCycleLR or another step-scale schedule, call the scheduler after every mini-batch update:
+
+```python
+num_epochs = 100
+
+scheduler = lr.OneCycleLR(
+    optimizer,
+    max_lr = 1e-3,
+    epochs = num_epochs,
+    steps_per_epoch = len(train_loader),
+)
+
+for epoch in range(num_epochs):
+    for x, y in train_loader:
+        optimizer.zero_grad()
+        pred = model(x)
+        loss = compute_loss(pred, y)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+```
+
+SequentialLR can combine step-scale warmup and cosine decay:
+
+```python
+num_epochs = 100
+total_steps = num_epochs * len(train_loader)
+warmup_steps = int(0.1 * total_steps)
+
+warmup = lr.LinearLR(
+    optimizer,
+    start_factor = 0.01,
+    end_factor = 1.0,
+    total_iters = warmup_steps,
+)
+cosine = lr.CosineAnnealingLR(
+    optimizer,
+    T_max = total_steps - warmup_steps,
+    eta_min = 1e-6,
+)
+scheduler = lr.SequentialLR(
+    optimizer,
+    schedulers = [warmup, cosine],
+    milestones = [warmup_steps],
+)
+
+for epoch in range(num_epochs):
+    for x, y in train_loader:
+        optimizer.zero_grad()
+        pred = model(x)
+        loss = compute_loss(pred, y)
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+```
+
+::: {.callout-warning}
+The scheduler configuration must use the same unit as the frequency of `scheduler.step()`. If `T_max` is expressed in epochs, step once per epoch; if it is expressed in total optimization steps, step once per mini-batch.
+:::
+
+A reproducible configuration records the scheduler type, parameters, call frequency, and total number of calls. The scheduler name alone does not determine the learning-rate trajectory.
+
+## 4.9.12 Chapter Summary
+
+An optimizer determines how to update parameters given a gradient and learning rate. A scheduler determines the learning rate at the current stage of training.
+
+A fixed learning rate has difficulty balancing early optimization speed with late-stage update precision. Transformer, ViT, and large-model training often also use warmup to limit the effect of the peak learning rate at the start of training.
+
+Common schedulers fall into several groups:
+
+- StepLR and MultiStepLR apply staircase decay.
+- ExponentialLR applies exponential decay.
+- CosineAnnealingLR applies smooth cosine decay.
+- ReduceLROnPlateau responds to a stalled validation metric.
+- OneCycleLR applies a strong rise-then-fall schedule.
+- LinearLR, SequentialLR, and LambdaLR support warmup and custom compositions.
+
+When the total number of training steps is known, AdamW with warmup and cosine decay is a common starting point for modern models. Classical CNNs often begin with SGD and momentum plus StepLR or MultiStepLR. ReduceLROnPlateau is appropriate when validation progress should determine decay. OneCycleLR is an experimental candidate when total steps are fixed, per-batch scheduling is available, and regularization can be tuned jointly.
+
+This completes the chapter's path from SGD and momentum through adaptive learning rates, Adam, AdamW, Muon, optimizer selection, and learning-rate scheduling. When analyzing later CNN, Transformer, ViT, or large-model configurations, treat the optimizer, scheduler, call frequency, and training budget as one system rather than comparing a single component in isolation.
